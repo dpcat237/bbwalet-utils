@@ -71,6 +71,8 @@ func TestRun_DryRun_WritesReportsNoRecords(t *testing.T) {
 	stdout, err := run(t, "--export", exportPath(), "--dry-run")
 	require.NoError(t, err)
 	require.Contains(t, stdout, "planned (dry run)")
+	require.Contains(t, stdout, "would create 2 records across 1 accounts")
+	require.Contains(t, stdout, "1 custom categories to create")
 
 	require.FileExists(t, filepath.Join(outDir, "_load_summary.txt"))
 	require.FileExists(t, filepath.Join(outDir, "_category_map.csv"))
@@ -153,4 +155,16 @@ func TestRun_Help_ReturnsNil(t *testing.T) {
 	setEnv(t, "http://unused.example", "tok", t.TempDir())
 	_, err := run(t, "-h")
 	require.NoError(t, err)
+}
+
+func TestRun_Progress_LiveLoadEmitsProgressLine(t *testing.T) {
+	srv := walletStub(t)
+	outDir := t.TempDir()
+	setEnv(t, srv.URL, "tok", outDir)
+
+	// interval 0 disables the heartbeat; phase/wait events still fire.
+	out, err := run(t, "--export", exportPath(), "--progress-interval", "0")
+	require.NoError(t, err)
+	require.Contains(t, out, "msg=progress")
+	require.Contains(t, out, "phase=creating-records")
 }

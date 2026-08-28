@@ -76,12 +76,20 @@ type Waiter interface {
 	Wait(ctx context.Context, d time.Duration) error
 }
 
+// Progress receives load-progress events at phase boundaries, batch boundaries,
+// and rate-limit wait entry/exit. A nil Deps.Progress is a silent no-op; a
+// Report error disables further reporting for the rest of the run.
+type Progress interface {
+	Report(ev ProgressEvent) error
+}
+
 // Deps bundles every port a Service needs.
 type Deps struct {
-	Reader  ExportReader
-	Catalog Catalog
-	Records Records
-	State   ResumeState
-	Journal InFlightJournal
-	Waiter  Waiter
+	Reader   ExportReader
+	Catalog  Catalog
+	Records  Records
+	State    ResumeState
+	Journal  InFlightJournal
+	Waiter   Waiter
+	Progress Progress
 }

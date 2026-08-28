@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/dpcat237/bbwalet-utils/config"
 	"github.com/dpcat237/bbwalet-utils/internal/adapters/resumestore"
@@ -25,16 +26,17 @@ import (
 )
 
 type cliOptions struct {
-	export         string
-	dryRun         bool
-	rollback       bool
-	limit          int
-	batchSize      int
-	tzOffset       string
-	accountMap     string
-	fallbackParent string
-	fallbackCatID  string
-	resumeState    string
+	export           string
+	dryRun           bool
+	rollback         bool
+	limit            int
+	batchSize        int
+	tzOffset         string
+	accountMap       string
+	fallbackParent   string
+	fallbackCatID    string
+	resumeState      string
+	progressInterval time.Duration
 }
 
 // Run is the testable entry point behind cmd/wallet-migrate.
@@ -49,7 +51,7 @@ func Run(ctx context.Context, _ string, args []string, stdout, stderr io.Writer)
 	if err := config.Load(); err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	logger.Init()
+	logger.Init(stderr)
 	return run(ctx, opts, stdout)
 }
 
@@ -68,6 +70,8 @@ func parseFlags(args []string, stderr io.Writer) (cliOptions, error) {
 	fs.StringVar(&o.fallbackParent, "fallback-parent", "Others", "system category to parent unmatched custom categories")
 	fs.StringVar(&o.fallbackCatID, "fallback-category", "", "category id for unmatched non-custom categories")
 	fs.StringVar(&o.resumeState, "resume-state", "", "created-records file (default <output>/_created_records.csv)")
+	fs.DurationVar(&o.progressInterval, "progress-interval", 30*time.Minute,
+		"heartbeat interval during a live load (0 disables the heartbeat)")
 
 	if err := fs.Parse(args); err != nil {
 		return cliOptions{}, err //nolint:wrapcheck // flag already printed usage to stderr; caller special-cases ErrHelp
@@ -90,20 +94,22 @@ func run(ctx context.Context, o cliOptions, stdout io.Writer) error {
 		return errors.New("APP_WALLET_API_TOKEN is required for a live run — set it in .env.dev or .env.local")
 	}
 
+	reporter := newProgressReporter(o.progressInterval, time.Now())
 	client := wallethttp.New(&http.Client{Timeout: cfg.HTTPTimeout}, cfg.WalletBaseURL, cfg.WalletAPIToken)
 	svc := walletload.New(walletload.Deps{
-		Reader:  walletcsv.New(o.export),
-		Catalog: client,
-		Records: client,
-		State:   store,
-		Journal: store,
-		Waiter:  waiter{},
+		Reader:   walletcsv.New(o.export),
+		Catalog:  client,
+		Records:  client,
+		State:    store,
+		Journal:  store,
+		Waiter:   waiter{},
+		Progress: reporter,
 	})
 
 	if o.rollback {
 		return doRollback(ctx, svc, cfg.OutputDir, stdout)
 	}
-	return doLoad(ctx, svc, o, cfg.OutputDir, stdout)
+	return doLoad(ctx, svc, reporter, o, cfg.OutputDir, stdout)
 }
 
 func doRollback(ctx context.Context, svc *walletload.Service, outDir string, stdout io.Writer) error {
@@ -117,7 +123,10 @@ func doRollback(ctx context.Context, svc *walletload.Service, outDir string, std
 	return printSummary(stdout, sum, "rolled back")
 }
 
-func doLoad(ctx context.Context, svc *walletload.Service, o cliOptions, outDir string, stdout io.Writer) error {
+func doLoad(
+	ctx context.Context, svc *walletload.Service, reporter *progressReporter,
+	o cliOptions, outDir string, stdout io.Writer,
+) error {
 	if o.export == "" {
 		return errors.New("--export is required")
 	}
@@ -125,6 +134,13 @@ func doLoad(ctx context.Context, svc *walletload.Service, o cliOptions, outDir s
 	if err != nil {
 		return err
 	}
+
+	if !o.dryRun && o.progressInterval > 0 {
+		done := make(chan struct{})
+		defer close(done)
+		go reporter.runHeartbeat(ctx, done)
+	}
+
 	sum, err := svc.Load(ctx, walletload.LoadOptions{
 		BatchSize:          o.batchSize,
 		Limit:              o.limit,
@@ -142,9 +158,27 @@ func doLoad(ctx context.Context, svc *walletload.Service, o cliOptions, outDir s
 	}
 	mode := "loaded"
 	if o.dryRun {
+		if err := printPlanned(stdout, sum); err != nil {
+			return err
+		}
 		mode = "planned (dry run)"
 	}
 	return printSummary(stdout, sum, mode)
+}
+
+// printPlanned writes the R5 dry-run line: the work a live load would do.
+func printPlanned(stdout io.Writer, sum walletload.Summary) error {
+	records := 0
+	for _, n := range sum.PerAccountPlanned {
+		records += n
+	}
+	_, err := fmt.Fprintf(stdout,
+		"would create %d records across %d accounts; %d custom categories to create\n",
+		records, len(sum.PerAccountPlanned), sum.CategoriesCreated+sum.CategoriesFallback)
+	if err != nil {
+		return fmt.Errorf("writing planned summary: %w", err)
+	}
+	return nil
 }
 
 func loadAccountMap(path string) (map[string]string, error) {

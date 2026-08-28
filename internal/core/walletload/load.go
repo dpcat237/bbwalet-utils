@@ -159,7 +159,15 @@ func amountsEqual(a, b string) bool {
 
 // --- batched record creation ----------------------------------------------
 
-func (s *Service) writeAll(ctx context.Context, inputs []RecordInput, opts LoadOptions, sum *Summary) error {
+func (s *Service) writeAll(
+	ctx context.Context, inputs []RecordInput, names map[string]string, opts LoadOptions, sum *Summary,
+) error {
+	total := 0
+	for _, in := range inputs {
+		if !s.deps.State.Loaded(in.RowKey) {
+			total++
+		}
+	}
 	created := 0
 	for _, accountID := range accountOrder(inputs) {
 		pending := s.unloaded(inputs, accountID)
@@ -173,6 +181,11 @@ func (s *Service) writeAll(ctx context.Context, inputs []RecordInput, opts LoadO
 				return err
 			}
 			created += n
+			s.report(ProgressEvent{
+				Kind: ProgressBatch, Phase: PhaseCreatingRecords,
+				Account: names[accountID], Created: created, Total: total,
+				Requests: sum.Requests, Retries: sum.Retries,
+			})
 		}
 	}
 	return nil
@@ -235,9 +248,18 @@ func (s *Service) createWithRetry(
 		}
 		sum.RateLimitHits++
 		sum.Retries++
+		s.report(ProgressEvent{
+			Kind: ProgressWaitEnter, Phase: PhaseWaitingRateLimited,
+			WaitDuration: rl.RetryAfter, WaitReason: "429",
+			Requests: sum.Requests, Retries: sum.Retries,
+		})
 		if werr := s.deps.Waiter.Wait(ctx, rl.RetryAfter); werr != nil {
 			return nil, fmt.Errorf("waiting out rate limit: %w", werr)
 		}
+		s.report(ProgressEvent{
+			Kind: ProgressWaitExit, Phase: PhaseCreatingRecords,
+			Requests: sum.Requests, Retries: sum.Retries,
+		})
 	}
 	return nil, ErrRetriesExhausted
 }
@@ -373,6 +395,28 @@ func fillSkipSummary(sum *Summary, an analysis) {
 			sum.SkippedRows = append(sum.SkippedRows, *ar.skip)
 		}
 	}
+}
+
+// fillPlannedSummary tallies the sendable rows per export account. It runs for
+// dry-run and live loads alike so a dry-run Summary describes the planned work.
+func fillPlannedSummary(sum *Summary, an analysis) {
+	for _, ar := range an.rows {
+		if ar.skip == nil && ar.accountID != "" {
+			sum.PerAccountPlanned[ar.row.Account]++
+		}
+	}
+}
+
+// accountNames maps a resolved account id back to the export account name, for
+// the Account field of batch progress events.
+func accountNames(an analysis) map[string]string {
+	m := make(map[string]string, len(an.rows))
+	for _, ar := range an.rows {
+		if ar.accountID != "" {
+			m[ar.accountID] = ar.row.Account
+		}
+	}
+	return m
 }
 
 func countCategoryActions(sum *Summary) {

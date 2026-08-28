@@ -4,13 +4,13 @@ package logger
 import (
 	"io"
 	"log/slog"
-	"os"
 )
 
-// Init installs a text slog handler that writes to stderr as the default
-// logger. Call it once during startup, before the first log call.
-func Init() {
-	slog.SetDefault(slog.New(newHandler(os.Stderr)))
+// Init installs a text slog handler that writes to w as the default logger.
+// Call it once during startup, before the first log call; pass os.Stderr in
+// production and a buffer in tests.
+func Init(w io.Writer) {
+	slog.SetDefault(slog.New(newHandler(w)))
 }
 
 func newHandler(w io.Writer) slog.Handler {

@@ -129,6 +129,43 @@ type PlannedCategory struct {
 	ParentID string
 }
 
+// ProgressKind classifies a ProgressEvent.
+type ProgressKind string
+
+// Progress event kinds reported through the Progress port.
+const (
+	ProgressStart     ProgressKind = "start"
+	ProgressPhase     ProgressKind = "phase"
+	ProgressBatch     ProgressKind = "batch"
+	ProgressWaitEnter ProgressKind = "wait-enter"
+	ProgressWaitExit  ProgressKind = "wait-exit"
+)
+
+// LoadPhase names the stage a load is in when a ProgressEvent is emitted.
+type LoadPhase string
+
+// Load phases reported through the Progress port.
+const (
+	PhaseLoadingCatalogue   LoadPhase = "loading-catalogue"
+	PhaseCreatingCategories LoadPhase = "creating-categories"
+	PhaseCreatingRecords    LoadPhase = "creating-records"
+	PhaseWaitingRateLimited LoadPhase = "waiting-rate-limited"
+)
+
+// ProgressEvent is one load-progress observation handed to a Progress port.
+type ProgressEvent struct {
+	Kind          ProgressKind
+	Phase         LoadPhase
+	Account       string // export account name in progress ("" when N/A)
+	Created       int    // cumulative records committed this run
+	Total         int    // records still to send from this run's start point
+	AlreadyLoaded int    // rows already committed and skipped (set on ProgressStart)
+	Requests      int
+	Retries       int
+	WaitDuration  time.Duration // ProgressWaitEnter only
+	WaitReason    string        // ProgressWaitEnter only, e.g. "429"
+}
+
 // LoadOptions are the per-run choices (CLI flags).
 type LoadOptions struct {
 	BatchSize          int
@@ -162,6 +199,7 @@ type Summary struct {
 	CategoriesFallback int
 	CategoriesNone     int
 	CategoryMap        []CategoryMapping
+	PerAccountPlanned  map[string]int // sendable rows per account (set for dry-run and live)
 	Requests           int
 	Retries            int
 	RateLimitHits      int
@@ -174,5 +212,6 @@ func newSummary() *Summary {
 	return &Summary{
 		Skipped:           map[SkipReason]int{},
 		PerAccountCreated: map[string]int{},
+		PerAccountPlanned: map[string]int{},
 	}
 }

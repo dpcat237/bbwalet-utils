@@ -2,6 +2,7 @@ package logger
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"testing"
 
@@ -19,6 +20,6 @@ func TestNewHandler_EmitsTextFormat(t *testing.T) {
 }
 
 func TestInit_DoesNotPanic(t *testing.T) {
-	require.NotPanics(t, Init)
+	require.NotPanics(t, func() { Init(io.Discard) })
 	require.NotNil(t, slog.Default())
 }

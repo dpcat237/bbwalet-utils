@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -310,6 +311,9 @@ func (c *Client) doRetrying(
 		if !errors.As(err, &rl) || attempt >= maxGetRetries {
 			return status, data, err
 		}
+		slog.Info("progress",
+			"phase", string(core.PhaseWaitingRateLimited),
+			"reason", "get-429", "wait", rl.RetryAfter)
 		if werr := sleepCtx(ctx, rl.RetryAfter); werr != nil {
 			return 0, nil, werr
 		}
@@ -392,6 +396,9 @@ func pace(ctx context.Context, h http.Header) error {
 	if convErr != nil || n > pacingThreshold {
 		return nil //nolint:nilerr // an unparseable header just means no pacing signal
 	}
+	slog.Info("progress",
+		"phase", string(core.PhaseWaitingRateLimited),
+		"reason", "pacing", "wait", pacingPause)
 	return sleepCtx(ctx, pacingPause)
 }
 

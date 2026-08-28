@@ -16,12 +16,33 @@ const (
 
 // Service loads a Wallet export into Wallet through the ports in Deps.
 type Service struct {
-	deps Deps
+	deps        Deps
+	progressOff bool
 }
 
-// New returns a Service backed by the given ports.
+// New returns a Service backed by the given ports. A nil Deps.Progress is
+// replaced with a no-op so call sites never need a nil check.
 func New(d Deps) *Service {
+	if d.Progress == nil {
+		d.Progress = noopProgress{}
+	}
 	return &Service{deps: d}
+}
+
+type noopProgress struct{}
+
+func (noopProgress) Report(ProgressEvent) error { return nil }
+
+// report forwards ev to the Progress port. Progress is best-effort: the first
+// Report error disables reporting for the rest of this Service's lifetime and
+// is otherwise swallowed — it never affects the load.
+func (s *Service) report(ev ProgressEvent) {
+	if s.progressOff {
+		return
+	}
+	if err := s.deps.Progress.Report(ev); err != nil {
+		s.progressOff = true
+	}
 }
 
 // Plan validates the export against the live catalogue and reports what a load
@@ -40,6 +61,10 @@ func (s *Service) Plan(ctx context.Context, opts LoadOptions) (Plan, error) {
 func (s *Service) Load(ctx context.Context, opts LoadOptions) (Summary, error) {
 	opts = normaliseOptions(opts)
 
+	if !opts.DryRun {
+		s.report(ProgressEvent{Kind: ProgressPhase, Phase: PhaseLoadingCatalogue})
+	}
+
 	an, err := s.analyseExport(ctx, opts)
 	if err != nil {
 		return Summary{}, err
@@ -51,6 +76,7 @@ func (s *Service) Load(ctx context.Context, opts LoadOptions) (Summary, error) {
 	sum := newSummary()
 	sum.RowsIn = an.rowsIn
 	fillSkipSummary(sum, an)
+	fillPlannedSummary(sum, an)
 
 	if opts.DryRun {
 		sum.CategoryMap = an.categoryMap
@@ -58,13 +84,35 @@ func (s *Service) Load(ctx context.Context, opts LoadOptions) (Summary, error) {
 		return *sum, nil
 	}
 
+	s.reportLoadStart(an, sum)
 	if err := s.runLoad(ctx, an, opts, sum); err != nil {
 		return *sum, err
 	}
 	return *sum, nil
 }
 
+// reportLoadStart emits the ProgressStart event: the count of records this run
+// still has to send and how many committed rows it will skip (R6).
+func (s *Service) reportLoadStart(an analysis, sum *Summary) {
+	planned := 0
+	for _, n := range sum.PerAccountPlanned {
+		planned += n
+	}
+	already := 0
+	for _, ar := range an.rows {
+		if ar.skip == nil && ar.accountID != "" && s.deps.State.Loaded(ar.row.RowKey) {
+			already++
+		}
+	}
+	s.report(ProgressEvent{
+		Kind:          ProgressStart,
+		Total:         planned - already,
+		AlreadyLoaded: already,
+	})
+}
+
 func (s *Service) runLoad(ctx context.Context, an analysis, opts LoadOptions, sum *Summary) error {
+	s.report(ProgressEvent{Kind: ProgressPhase, Phase: PhaseCreatingCategories})
 	made, err := s.createCategories(ctx, an.toCreate, sum)
 	if err != nil {
 		return err
@@ -73,11 +121,12 @@ func (s *Service) runLoad(ctx context.Context, an analysis, opts LoadOptions, su
 	sum.CategoryMap = an.categoryMap
 	countCategoryActions(sum)
 
+	s.report(ProgressEvent{Kind: ProgressPhase, Phase: PhaseCreatingRecords})
 	inputs := collectInputs(an)
 	if err := s.reconcile(ctx, indexInputs(inputs), sum); err != nil {
 		return err
 	}
-	return s.writeAll(ctx, inputs, opts, sum)
+	return s.writeAll(ctx, inputs, accountNames(an), opts, sum)
 }
 
 // Rollback deletes every record this tool recorded in the resume store and

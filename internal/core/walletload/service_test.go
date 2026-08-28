@@ -120,6 +120,26 @@ func (f *fakeWaiter) Wait(_ context.Context, d time.Duration) error {
 	return nil
 }
 
+type fakeProgress struct {
+	events []wl.ProgressEvent
+	err    error
+}
+
+func (f *fakeProgress) Report(ev wl.ProgressEvent) error {
+	f.events = append(f.events, ev)
+	return f.err
+}
+
+func (f *fakeProgress) byKind(k wl.ProgressKind) []wl.ProgressEvent {
+	var out []wl.ProgressEvent
+	for _, e := range f.events {
+		if e.Kind == k {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // --- fixtures -----------------------------------------------------------
 
 func sampleAccounts() []wl.Account {
@@ -157,6 +177,22 @@ func sampleRows() []wl.ExportRow {
 
 func newService(r wl.ExportReader, c wl.Catalog, rec wl.Records, st wl.ResumeState, j wl.InFlightJournal, w wl.Waiter) *wl.Service {
 	return wl.New(wl.Deps{Reader: r, Catalog: c, Records: rec, State: st, Journal: j, Waiter: w})
+}
+
+// newProgressService wires a Service over sampleAccounts/sampleCategories with a
+// Progress port for the progress-event tests.
+func newProgressService(
+	rows []wl.ExportRow, p wl.Progress, rec wl.Records, st wl.ResumeState,
+) *wl.Service {
+	return wl.New(wl.Deps{
+		Reader:   fakeReader{rows: rows},
+		Catalog:  &fakeCatalog{accounts: sampleAccounts(), categories: sampleCategories()},
+		Records:  rec,
+		State:    st,
+		Journal:  &fakeJournal{},
+		Waiter:   &fakeWaiter{},
+		Progress: p,
+	})
 }
 
 func baseOpts() wl.LoadOptions {
@@ -422,6 +458,119 @@ func TestService_Load_ReaderError_Wrapped(t *testing.T) {
 
 	_, err := svc.Load(context.Background(), baseOpts())
 	require.ErrorIs(t, err, sentinel)
+}
+
+func TestService_Load_Progress_ReportsStartPhasesAndBatches(t *testing.T) {
+	t.Parallel()
+
+	p := &fakeProgress{}
+	svc := newProgressService(sampleRows(), p, &fakeRecords{}, newFakeState())
+
+	_, err := svc.Load(context.Background(), baseOpts())
+	require.NoError(t, err)
+
+	starts := p.byKind(wl.ProgressStart)
+	require.Len(t, starts, 1)
+	require.Equal(t, 3, starts[0].Total) // k1,k2 (Denys EUR) + k3 (Denys UAH); k4 foreign, k5 zero
+	require.Equal(t, 0, starts[0].AlreadyLoaded)
+
+	var phases []wl.LoadPhase
+	for _, e := range p.byKind(wl.ProgressPhase) {
+		phases = append(phases, e.Phase)
+	}
+	require.Equal(t, []wl.LoadPhase{
+		wl.PhaseLoadingCatalogue, wl.PhaseCreatingCategories, wl.PhaseCreatingRecords,
+	}, phases)
+
+	batches := p.byKind(wl.ProgressBatch)
+	require.NotEmpty(t, batches)
+	require.NotEmpty(t, batches[0].Account)
+	require.Equal(t, 3, batches[len(batches)-1].Created)
+	require.Equal(t, 3, batches[len(batches)-1].Total)
+}
+
+func TestService_Load_Progress_WaitEnterExitAroundRateLimit(t *testing.T) {
+	t.Parallel()
+
+	rec := &fakeRecords{responder: func(call int, in []wl.RecordInput) ([]wl.RecordResult, error) {
+		if call == 0 {
+			return nil, &wl.ErrRateLimited{RetryAfter: 2 * time.Second}
+		}
+		return okResults(in), nil
+	}}
+	p := &fakeProgress{}
+	rows := []wl.ExportRow{
+		{RowKey: "k1", Account: "Denys EUR", Category: "Food", Currency: "EUR", Amount: "-1.00", Date: at("2024-01-01 00:00:00")},
+	}
+	svc := newProgressService(rows, p, rec, newFakeState())
+
+	_, err := svc.Load(context.Background(), baseOpts())
+	require.NoError(t, err)
+
+	enterIdx := -1
+	for i, e := range p.events {
+		if e.Kind == wl.ProgressWaitEnter {
+			enterIdx = i
+			require.Equal(t, wl.PhaseWaitingRateLimited, e.Phase)
+			require.Equal(t, "429", e.WaitReason)
+			require.Equal(t, 2*time.Second, e.WaitDuration)
+		}
+	}
+	require.GreaterOrEqual(t, enterIdx, 0, "a wait-enter event is emitted on a 429")
+	require.Equal(t, wl.ProgressWaitExit, p.events[enterIdx+1].Kind, "wait-exit follows wait-enter")
+}
+
+func TestService_Load_Progress_NilPortIsNoop(t *testing.T) {
+	t.Parallel()
+
+	rec := &fakeRecords{}
+	svc := wl.New(wl.Deps{
+		Reader:   fakeReader{rows: sampleRows()},
+		Catalog:  &fakeCatalog{accounts: sampleAccounts(), categories: sampleCategories()},
+		Records:  rec,
+		State:    newFakeState(),
+		Journal:  &fakeJournal{},
+		Waiter:   &fakeWaiter{},
+		Progress: nil,
+	})
+
+	sum, err := svc.Load(context.Background(), baseOpts())
+	require.NoError(t, err)
+	require.Equal(t, 2, sum.PerAccountCreated["acc-eur"])
+	require.Equal(t, 1, sum.PerAccountCreated["acc-uah"])
+}
+
+func TestService_Load_Progress_ReportErrorDoesNotAbort(t *testing.T) {
+	t.Parallel()
+
+	base := newProgressService(sampleRows(), &fakeProgress{}, &fakeRecords{}, newFakeState())
+	baseSum, err := base.Load(context.Background(), baseOpts())
+	require.NoError(t, err)
+
+	p := &fakeProgress{err: errors.New("sink down")}
+	svc := newProgressService(sampleRows(), p, &fakeRecords{}, newFakeState())
+	sum, err := svc.Load(context.Background(), baseOpts())
+	require.NoError(t, err)
+
+	require.Equal(t, baseSum.PerAccountCreated, sum.PerAccountCreated)
+	require.Len(t, p.events, 1, "reporting stops after the first Report error")
+}
+
+func TestService_Load_Progress_ResumeReportsAlreadyLoaded(t *testing.T) {
+	t.Parallel()
+
+	st := newFakeState()
+	st.loaded["k1"] = true
+	p := &fakeProgress{}
+	svc := newProgressService(sampleRows(), p, &fakeRecords{}, st)
+
+	_, err := svc.Load(context.Background(), baseOpts())
+	require.NoError(t, err)
+
+	starts := p.byKind(wl.ProgressStart)
+	require.Len(t, starts, 1)
+	require.Equal(t, 1, starts[0].AlreadyLoaded)
+	require.Equal(t, 2, starts[0].Total) // 3 sendable - 1 already committed
 }
 
 func TestService_Rollback_DeletesKnownAndReportsOrphans(t *testing.T) {
