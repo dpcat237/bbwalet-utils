@@ -1,0 +1,1 @@
+{"results":[{"inputIndex":0,"id":"rec-1","success":true},{"inputIndex":1,"success":false,"error":"amount must not be zero","errorType":"client_error"}],"summary":{"total":2,"succeeded":1,"clientErrors":1,"serverErrors":0,"documentsWritten":1}}

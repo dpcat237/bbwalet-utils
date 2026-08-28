@@ -1,0 +1,244 @@
+# golangci-lint v2 config for github.com/dpcat237/bbwalet-utils.
+# Enforces the hexagonal core/adapters/platform layering (depguard) and the
+# coding rules in .agents/architecture-go.md. Validated against golangci-lint
+# v2.13.2 (`golangci-lint config verify`); needs >= 2.13.x for the Go 1.27
+# toolchain (2.12.2's bundled staticcheck panics on 1.27 stdlib ASTs).
+version: "2"
+run:
+  issues-exit-code: 1
+  tests: true
+  allow-parallel-runners: false
+output:
+  path-prefix: ""
+linters:
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - containedctx
+    - contextcheck
+    - decorder
+    - depguard
+    - dogsled
+    - dupl
+    - durationcheck
+    - errchkjson
+    - errorlint
+    - exhaustive
+    - forbidigo
+    - forcetypeassert
+    - funlen
+    - gochecknoglobals
+    - gochecknoinits
+    - gocheckcompilerdirectives
+    - gochecksumtype
+    - gocyclo
+    - goconst
+    - gosec
+    - gosmopolitan
+    - interfacebloat
+    - lll
+    - loggercheck
+    - makezero
+    - misspell
+    - musttag
+    - nakedret
+    - nestif
+    - nilerr
+    - nilnesserr
+    - nilnil
+    - noctx
+    - nolintlint
+    - protogetter
+    - reassign
+    - recvcheck
+    - spancheck
+    - sqlclosecheck
+    - testifylint
+    - testpackage
+    - unconvert
+    - unparam
+    - whitespace
+    - wrapcheck
+    - zerologlint
+  disable:
+    - rowserrcheck
+  settings:
+    depguard:
+      # depguard's `pkg` match is a PREFIX check against the full import path,
+      # not a substring/regex search — a mid-path fragment like
+      # "internal/adapters" never matches, since it is not a prefix of
+      # "github.com/dpcat237/bbwalet-utils/internal/adapters/...". A trailing "$"
+      # switches a pattern to an exact match (so "math/rand$" bans math/rand
+      # without also banning the unrelated math/rand/v2).
+      rules:
+        core:
+          files:
+            - "**/internal/core/**/*.go"
+          deny:
+            - pkg: "github.com/dpcat237/bbwalet-utils/internal/adapters"
+              desc: "internal/core must have zero infrastructure imports — see .agents/architecture-go.md Layout"
+            - pkg: "github.com/dpcat237/bbwalet-utils/internal/platform"
+              desc: "internal/core must have zero infrastructure imports — see .agents/architecture-go.md Layout"
+        adapters:
+          files:
+            - "**/internal/adapters/**/*.go"
+          deny:
+            - pkg: "github.com/dpcat237/bbwalet-utils/internal/adapters"
+              desc: "an adapter depends on core and platform, never on another adapter — wire cross-adapter needs through cmd/<tool> (see .agents/architecture-go.md Cross-domain communication)"
+        platform:
+          files:
+            - "**/internal/platform/**/*.go"
+          deny:
+            - pkg: "github.com/dpcat237/bbwalet-utils/internal/core"
+              desc: "platform is generic infrastructure, not domain logic — see .agents/architecture-go.md Layout"
+            - pkg: "github.com/dpcat237/bbwalet-utils/internal/adapters"
+              desc: "platform is generic infrastructure, not domain logic — see .agents/architecture-go.md Layout"
+        forbidden-imports:
+          deny:
+            - pkg: "math/rand$"
+              desc: "crypto/rand only for anything security-related — see .agents/architecture-go.md Dependencies. A genuine non-security use needs an explicit justified nolint, not a silent pass"
+            - pkg: "io/ioutil$"
+              desc: "deprecated since Go 1.16 — use io/os — see .agents/architecture-go.md Dependencies"
+            - pkg: "github.com/pkg/errors$"
+              desc: "use stdlib fmt.Errorf with %w — see .agents/architecture-go.md Dependencies"
+            - pkg: "golang.org/x/net/context$"
+              desc: "use stdlib context — see .agents/architecture-go.md Dependencies"
+    forbidigo:
+      forbid:
+        - pattern: "^time\\.Sleep$"
+          msg: "never use time.Sleep for synchronization — use channels, sync.WaitGroup, or context with timeout (.agents/architecture-go.md Concurrency)"
+        - pattern: "^fmt\\.Print(f|ln)?$"
+          msg: "use log/slog, not fmt.Print* — .agents/architecture-go.md Logging"
+    interfacebloat:
+      max: 3
+    dogsled:
+      max-blank-identifiers: 2
+    dupl:
+      threshold: 100
+    errcheck:
+      disable-default-exclusions: false
+      check-type-assertions: true
+      check-blank: true
+    exhaustive:
+      default-signifies-exhaustive: false
+    funlen:
+      lines: 80
+      statements: 40
+    gocognit:
+      min-complexity: 10
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+    gocritic:
+      disabled-checks:
+        - regexpMust
+      enabled-tags:
+        - performance
+      disabled-tags:
+        - experimental
+      settings:
+        captLocal:
+          paramsOnly: true
+        rangeValCopy:
+          sizeThreshold: 32
+    gocyclo:
+      min-complexity: 10
+    godot:
+      scope: all
+    godox:
+      keywords:
+        - NOTE
+        - OPTIMIZE
+        - HACK
+    lll:
+      line-length: 120
+      tab-width: 1
+    misspell:
+      locale: UK
+      ignore-rules:
+        - bsv
+        - bitcoin
+    nakedret:
+      max-func-lines: 30
+    nestif:
+      min-complexity: 4
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+    prealloc:
+      simple: true
+      range-loops: true
+      for-loops: false
+    testpackage:
+      skip-regexp: (export|internal)_test\.go
+    unparam:
+      check-exported: false
+    whitespace:
+      multi-if: false
+      multi-func: false
+    wsl:
+      strict-append: true
+      allow-assign-and-call: true
+      allow-multiline-assign: true
+      force-case-trailing-whitespace: 0
+      allow-trailing-comment: false
+      allow-separated-leading-comment: false
+      allow-cuddle-declarations: true
+      force-err-cuddling: false
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - dupl
+          - gocyclo
+          - gosec
+          - govet
+          - lll
+        path: _test\.go
+      - linters:
+          - staticcheck
+        text: 'SA1019:'
+      - linters:
+          - lll
+        source: '^//go:generate '
+      - path: (.+)\.go$
+        text: Using the variable on range scope .* in function literal
+    paths:
+      - test/*
+      - .github
+      - .make
+      - build
+      - dist
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: true
+  new-from-rev: ""
+  new: false
+severity:
+  default: error
+formatters:
+  enable:
+    - gofmt
+    - goimports
+    - gofumpt
+  settings:
+    gofmt:
+      simplify: true
+    gofumpt:
+      extra-rules: false
+    goimports:
+      local-prefixes:
+        - github.com/dpcat237/bbwalet-utils
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

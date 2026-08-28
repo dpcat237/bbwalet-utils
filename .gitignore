@@ -1,0 +1,10 @@
+# AI Agent Specifications - vendored plugin copy (.agents/.ai-spec/)
+.agents/.ai-spec/
+
+# Go build output
+/bin/
+
+# developer-local env overrides
+.env.local
+# shared dev overrides — gitignored because it may hold a real Wallet API token
+.env.dev

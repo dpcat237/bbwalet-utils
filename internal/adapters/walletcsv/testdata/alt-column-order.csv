@@ -1,0 +1,4 @@
+account;category;currency;amount;ref_currency_amount;type;payment_type;note;payment_type_local;date;gps_latitude;gps_longitude;gps_accuracy_in_meters;warranty_in_month;transfer;payee;labels;envelope_id;custom_category
+Denys EUR;Food;EUR;-12.00;-12.00;Expenses;CASH;lunch;Cash;2024-02-03 10:27:52;;;;0;false;Shop;;7002;false
+Denys EUR;Pharmacy;EUR;-5.00;-5.00;Expenses;CASH;;Cash;2023-01-01 09:00:00;;;;0;false;;;2006;true
+Denys EUR;Food;EUR;0;0;Income;CASH;;Cash;2020-04-04 07:00:00;;;;0;false;;;7002;false
