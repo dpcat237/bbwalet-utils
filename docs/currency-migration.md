@@ -122,11 +122,12 @@ mis-parses dates** (see [§7](#7-load-records-per-account) and
 **Planned loader ([task 5](../.agents/tasks/5/description.md)):** a Go CLI that
 reads the archived export and, against a freshly-reset EUR-base Wallet:
 
-1. Resolves each export `category` to a Wallet category ID, creating missing
-   **custom** categories via `POST /v1/api/categories/custom`; reports anything
-   it cannot map.
-2. Resolves each export `account` name to a target account ID (accounts
-   recreated per §6).
+1. Resolves each export `category` to a Wallet category ID (exact → normalised →
+   `categories-alias.csv` → create), and **stops** rather than load an
+   uncategorised record (task 5b).
+2. Resolves each export `account` name to a target account ID, **creating**
+   missing accounts via `POST /v1/api/accounts` with `--create-missing` (task 5b,
+   §6).
 3. Creates records in batches of ≤ 10 via `POST /v1/api/records` with
    `accountId`, signed `amount` (currency = the account's currency),
    `recordDate` (ISO 8601, historical dates accepted), `categoryId`,
@@ -180,8 +181,19 @@ Sources: [Change the main currency][a-currency],
 
 ## 6. Recreate accounts
 
-In the **Wallet Web App**, recreate the 6 accounts, each in its **original**
-currency:
+**The loader creates the accounts for you** (task 5b). Run `wallet-migrate` with
+`--create-missing`; it reads each distinct `account` name from the export and,
+for any that Wallet does not already have, calls `POST /v1/api/accounts` with:
+
+- `name` — the export account name,
+- `currencyCode` — the currency of that account's rows (the four
+  foreign-currency rows are set aside for review; the remainder is single-currency
+  and matches the name suffix). Override with `--account-currency "Name=EUR"` if
+  an account's rows are genuinely mixed.
+- `accountType` — `General` (override with `--account-type`),
+- `initialBalance` — `0` (override with `--account-initial-balance "Name=123.45"`).
+
+The 6 accounts in this dataset, each in its **original** currency:
 
 | Account | Currency |
 |---|---|
@@ -192,9 +204,11 @@ currency:
 | Catherine UAH | UAH |
 | Catherine USD | USD |
 
-- Create them as **General** accounts — imports are only available for General
-  accounts ([Unable to import my files][a-cantimport]).
-- You can rename / re-type an account after importing if needed.
+Run `--dry-run` first to see the exact "would create" list. You can still create
+the accounts by hand in the Web App if you prefer — the loader then just resolves
+them by name. (For a CSV-fallback import, create them as **General** accounts —
+imports are only available for General accounts,
+[Unable to import my files][a-cantimport].)
 
 ---
 
@@ -202,9 +216,9 @@ currency:
 
 ### Primary path — REST API (task 5 tool)
 
-Run the [task 5](../.agents/tasks/5/description.md) loader (see §4). It creates
-records via `POST /v1/api/records`, one account at a time, mapping/creating
-categories first. Verified against the spike:
+Run the [task 5](../.agents/tasks/5/description.md) loader (see §4). It resolves
+or creates the accounts (§6) and categories first, then creates records via
+`POST /v1/api/records`, one account at a time. Verified against the spike:
 
 - `recordDate` accepts arbitrary **historical** dates (ISO 8601) with no
   format ambiguity.
@@ -212,6 +226,23 @@ categories first. Verified against the spike:
 - `amount` sign encodes income vs expense; `amount.currencyCode` **must match
   the account currency**.
 - No reference-amount field — Wallet computes the EUR value.
+
+**Category resolution ([task 5b](../.agents/tasks/5b/description.md)).** The
+export's category names are an older vintage than the current Wallet catalogue
+(e.g. `Bar, cafe` → `Bar cafe`, `Restaurant, fast-food` →
+`Restaurants & fast food`), and the reset wallet has none of your custom
+categories. With `--create-missing` the loader resolves each export category in
+order: exact name, then a **normalised** match (case / `&` `,` `-` `and` /
+plural / word order / a trailing ` (Group)`), then the checked-in
+`categories-alias.csv` (semantic renames + the parent for each recreated custom),
+then it **creates** what is left as a custom subcategory. If any category still
+cannot be resolved the load **stops** rather than write an uncategorised record
+(pass `--fallback-category <id>` to override). `categories-alias.csv` is
+operator-editable — a row is `export name,target` where `target` is an existing
+live category, `create:Parent` to make a new custom subcategory, or **another
+export name** to merge two near-duplicates onto one category (e.g.
+`Vet,Veterinary` + `Veterinary,create:Pets & animals`). Add a row for anything
+the offline coverage test flags.
 
 Rollback: the loader's `--rollback` deletes the records it created (it records
 their IDs).
@@ -258,18 +289,55 @@ account. Undo: *Imports → account → file → Delete*.
 
 ## 8. Post-load verification
 
-For each account, compare against the archived export:
+### The `wallet-verify` tool ([task 6](../.agents/tasks/6/description.md))
 
-- transaction **count** per account;
-- **sum of `amount`** per account (must match exactly — amounts are unchanged);
-- spot-check that the app's main-currency figures are now **EUR**.
+`wallet-verify` reads the loaded state back through the REST API
+(`GET /v1/api/accounts` + paginated `GET /v1/api/records`, `source=rest`) and
+compares it to the archived export. It is **read-only** — it never writes to
+Wallet.
 
-The [task 6](../.agents/tasks/6/description.md) tool reads the loaded state back
-— via `GET /v1/api/records` + `GET /v1/api/accounts` (or a fresh CSV export as a
-cross-check) — and reports per-account mismatches. Until it exists, a
-spreadsheet pivot on the export vs a fresh post-load export is enough.
+```bash
+make build
+make run-wallet-verify ARGS="--export <archived-export.csv> --load-report-dir out"
+# token is sourced from .env.dev / .env.local by the make target
+```
 
-If records loaded wrong: roll back (REST loader `--rollback`, or *Imports →
+Flags: `--export` (required), `--load-report-dir` (task 5's `out/`, default
+`APP_OUTPUT_DIR`), `--account-map` (CSV `archived name,wallet account id` — for
+accounts renamed on recreation), `--rate-sample-size` (default 20),
+`--category-sample-size` (default 50), `--convert-to` (default `EUR`), `--out`
+(report path, default `<APP_OUTPUT_DIR>/_verify_report.txt`).
+
+It writes `out/_verify_report.txt` and prints a one-line `PASS` / `MISMATCH`
+summary; **exit code is non-zero when any account mismatches**. The report has
+four parts:
+
+- **R2 — per account:** expected vs actual transaction **count** and
+  **`sum(amount)`** (expected = archived rows minus the rows task 5 diverted to
+  `out/_review.csv`; actual = the account's `source=rest` records). Sums are
+  compared exactly. Status is `pass`, `count-mismatch`, `sum-mismatch`,
+  `missing-in-wallet` (account only in the archive) or `missing-in-archive`
+  (account only in Wallet).
+- **R3 — main currency:** the Wallet REST API exposes **no** base/main-currency
+  (and returns a converted amount only when `convertTo` is passed), so the tool
+  cannot verify this. Confirm the app's main-currency total reads **EUR** by eye
+  ([task 6a](../.agents/tasks/6a/description.md)).
+- **R3 — historical ref-rate diagnostic:** for a date-spread sample of USD and
+  UAH records the report lists `date / amount / converted EUR / ratio` and a
+  verdict hint — `date-accurate` (the ratio varies with the record date) or
+  `current-rate` (one ratio for every date). This is **diagnostic only**:
+  Wallet computes the reference amount itself and it cannot be supplied (see
+  [Known risks](#known-risks)).
+- **R4 — category spot-check:** sampled loaded records' categories vs the
+  archive (`matched` / `changed` / `unmatched`), plus the list of categories
+  task 5 could not map (`_category_map.csv` rows with action `none` or
+  `fallback-parent`) for the manual pass.
+
+> **Note:** `actual` counts the account's `source=rest` records — accurate for a
+> freshly reset wallet loaded only by `wallet-migrate`. Records added by hand or
+> by the MCP client would inflate it.
+
+If records loaded wrong: roll back (`wallet-migrate --rollback`, or *Imports →
 account → file → Delete* for a CSV import) and re-run the corrected load.
 
 ---
@@ -286,10 +354,11 @@ them by hand after the migration:
 
 **Categories** are handled by the load path, not by hand:
 
-- **REST API path (primary):** the [task 5](../.agents/tasks/5/description.md)
-  loader maps each export category to a Wallet category ID and creates missing
-  custom ones (`POST /v1/api/categories/custom`) before loading records. Only
-  categories it cannot map are left for a manual pass.
+- **REST API path (primary):** with `--create-missing` the loader resolves every
+  export category (exact → normalised → `categories-alias.csv` → create) before
+  loading records, and **stops** rather than load an uncategorised record
+  ([task 5b](../.agents/tasks/5b/description.md)). Nothing is left for a manual
+  pass unless you set `--fallback-category`.
 - **CSV fallback path:** categories do **not** carry at all (task 3 spike) —
   budget a full manual re-categorisation of every record after import.
 
@@ -305,14 +374,23 @@ them by hand after the migration:
   Wallet always derives the EUR figure from its own rates. Historical "in EUR"
   reports will use Wallet's rates, which may not be date-accurate for old
   transactions. Whether Wallet's derivation is date-accurate or current-rate is
-  **not yet known** (not observable while the base currency is USD) — task 6
-  checks it post-reset. This does not block the migration; it only bounds how
-  precise historical EUR reporting can be.
+  **not yet known** (not observable while the base currency is USD). The
+  `wallet-verify` tool that performs this check now exists
+  ([§8](#8-post-load-verification)); the finding is recorded here after the
+  post-reset dry run ([task 6a](../.agents/tasks/6a/description.md)). This does
+  not block the migration; it only bounds how precise historical EUR reporting
+  can be.
 - **CSV import loses categories and mis-parses dates — resolved (task 3).** The
   CSV mapping UI has no Category field and silently swaps day/month for
   `YYYY-MM-DD` dates with day ≤ 12. This is why the REST API is the primary load
   path (§4, §7). If the CSV fallback is ever used: reformat dates to
   `DD/MM/YYYY` and plan a manual re-categorisation.
+- **Export category names drift from the live catalogue — resolved (task 5b).**
+  The 2026-08-28 export uses an older category-naming vintage and carries ~50
+  custom categories the reset wipes. The REST loader's `--create-missing` mode
+  (normalised match + checked-in `categories-alias.csv` + create) resolves all of
+  them, and an offline test (`TestPlanCategories_FullExportCoverage`) fails if a
+  future export or catalogue rename introduces an unresolved category.
 - **REST API maturity / access.** The Wallet REST API is v2.0.0 and recently
   introduced; some behaviour (transfers, converted amounts, record deletion
   semantics) is under-documented. It needs a token generated in the Web App and

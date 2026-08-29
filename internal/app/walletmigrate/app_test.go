@@ -72,7 +72,7 @@ func TestRun_DryRun_WritesReportsNoRecords(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, stdout, "planned (dry run)")
 	require.Contains(t, stdout, "would create 2 records across 1 accounts")
-	require.Contains(t, stdout, "1 custom categories to create")
+	require.Contains(t, stdout, "1 categories to create")
 
 	require.FileExists(t, filepath.Join(outDir, "_load_summary.txt"))
 	require.FileExists(t, filepath.Join(outDir, "_category_map.csv"))

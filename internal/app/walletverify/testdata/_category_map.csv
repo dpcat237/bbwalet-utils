@@ -1,0 +1,4 @@
+export_category,action,resolved_id
+Internet,resolved,c-int
+Food,resolved,c-food
+Pharmacy,fallback-parent,

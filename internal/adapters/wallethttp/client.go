@@ -1,7 +1,8 @@
 // Package wallethttp is the outbound adapter for the BudgetBakers Wallet REST
-// API. It implements the core walletload.Catalog and walletload.Records ports
-// with the standard library, translates HTTP failures into core sentinels at
-// the boundary, and never lets the bearer token leak into an error or log.
+// API. It implements the core walletload.Catalog, walletload.CatalogWriter and
+// walletload.Records ports with the standard library, translates HTTP failures
+// into core sentinels at the boundary, and never lets the bearer token leak
+// into an error or log.
 package wallethttp
 
 import (
@@ -26,14 +27,21 @@ const (
 	maxBodyBytes = 1 << 20
 	epochStart   = "1970-01-01T00:00:00Z"
 
-	// maxGetRetries bounds automatic 429 retries for idempotent calls
-	// (catalogue GETs, deletes). Record creation is retried by the core so its
-	// Summary can account for it.
-	maxGetRetries = 3
+	// maxGetRetries bounds automatic 429 retries for calls routed through
+	// send/doRetrying (catalogue GETs, deletes, account + custom-category
+	// creation). Record creation is retried by the core so its Summary can
+	// account for it. Kept generous because the Wallet limiter can stay hot for
+	// tens of seconds and a create has no resume store to fall back on.
+	maxGetRetries = 8
+	// defaultRetryAfter is the wait applied when a 429 carries no usable
+	// Retry-After (missing, non-numeric, or <= 0). The Wallet API sometimes
+	// answers a sustained limit with "Retry-After: 0"; without this floor the
+	// retry loop would burn every attempt in milliseconds and fail hard.
+	defaultRetryAfter = 3 * time.Second
 	// pacingThreshold: when the server reports this many requests or fewer left
 	// in the window, slow down pre-emptively instead of racing into a 429.
-	pacingThreshold = 3
-	pacingPause     = time.Second
+	pacingThreshold = 60
+	pacingPause     = 5 * time.Second
 )
 
 // Client talks to one Wallet API base URL with one bearer token.
@@ -47,6 +55,12 @@ type Client struct {
 func New(hc *http.Client, baseURL, token string) *Client {
 	return &Client{http: hc, baseURL: strings.TrimRight(baseURL, "/"), token: token}
 }
+
+var (
+	_ core.Catalog       = (*Client)(nil)
+	_ core.CatalogWriter = (*Client)(nil)
+	_ core.Records       = (*Client)(nil)
+)
 
 // --- ports: Catalog -------------------------------------------------------
 
@@ -106,6 +120,39 @@ func (c *Client) Categories(ctx context.Context) ([]core.Category, error) {
 		return offsetOrDone(body.NextOffset), nil
 	})
 	return out, err
+}
+
+type createAccountReqDTO struct {
+	Name           string      `json:"name"`
+	AccountType    string      `json:"accountType"`
+	CurrencyCode   string      `json:"currencyCode"`
+	InitialBalance json.Number `json:"initialBalance"`
+}
+
+// CreateAccount creates one target Wallet account (POST /v1/api/accounts) and
+// returns it as a core.Account. It only runs when --create-missing is set.
+func (c *Client) CreateAccount(ctx context.Context, in core.CreateAccountInput) (core.Account, error) {
+	bal := in.InitialBalance
+	if bal == "" {
+		bal = "0"
+	}
+	reqBody := createAccountReqDTO{
+		Name:           in.Name,
+		AccountType:    in.AccountType,
+		CurrencyCode:   in.CurrencyCode,
+		InitialBalance: json.Number(bal),
+	}
+	var body struct {
+		Account accountDTO `json:"account"`
+	}
+	if err := c.send(ctx, http.MethodPost, "/v1/api/accounts", nil, reqBody, &body); err != nil {
+		return core.Account{}, fmt.Errorf("creating account %q: %w", in.Name, err)
+	}
+	return core.Account{
+		ID:           body.Account.ID,
+		Name:         body.Account.Name,
+		CurrencyCode: body.Account.CurrencyCode,
+	}, nil
 }
 
 // CreateCustomCategory creates one custom subcategory under a system parent.
@@ -427,11 +474,14 @@ func statusError(status int, body []byte) error {
 
 func is429(status int) bool { return status == http.StatusTooManyRequests }
 
+// retryAfter reads the Retry-After header (delta-seconds only). A missing,
+// non-numeric, or <= 0 value yields defaultRetryAfter so callers never busy-loop
+// on a 429.
 func retryAfter(h http.Header) time.Duration {
-	if secs, err := strconv.Atoi(strings.TrimSpace(h.Get("Retry-After"))); err == nil && secs >= 0 {
+	if secs, err := strconv.Atoi(strings.TrimSpace(h.Get("Retry-After"))); err == nil && secs > 0 {
 		return time.Duration(secs) * time.Second
 	}
-	return time.Second
+	return defaultRetryAfter
 }
 
 func offsetOrDone(next *int) int {

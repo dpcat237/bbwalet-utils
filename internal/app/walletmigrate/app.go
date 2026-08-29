@@ -37,7 +37,15 @@ type cliOptions struct {
 	fallbackCatID    string
 	resumeState      string
 	progressInterval time.Duration
+
+	createMissing         bool
+	categoryAlias         string
+	accountType           string
+	accountInitialBalance string
+	accountCurrency       string
 }
+
+const defaultAliasFile = "categories-alias.csv"
 
 // Run is the testable entry point behind cmd/wallet-migrate.
 func Run(ctx context.Context, _ string, args []string, stdout, stderr io.Writer) error {
@@ -72,6 +80,15 @@ func parseFlags(args []string, stderr io.Writer) (cliOptions, error) {
 	fs.StringVar(&o.resumeState, "resume-state", "", "created-records file (default <output>/_created_records.csv)")
 	fs.DurationVar(&o.progressInterval, "progress-interval", 30*time.Minute,
 		"heartbeat interval during a live load (0 disables the heartbeat)")
+	fs.BoolVar(&o.createMissing, "create-missing", false,
+		"create target accounts and categories that cannot be matched (off = fail on any unmatched)")
+	fs.StringVar(&o.categoryAlias, "category-alias", "",
+		"category alias CSV (export_category,target); default "+defaultAliasFile+" when --create-missing is set")
+	fs.StringVar(&o.accountType, "account-type", "General", "accountType for any account the loader creates")
+	fs.StringVar(&o.accountInitialBalance, "account-initial-balance", "",
+		`per-account opening balance override, e.g. "Denys EUR=123.45,Denys UAH=0"`)
+	fs.StringVar(&o.accountCurrency, "account-currency", "",
+		`per-account currency override for creation, e.g. "Joint=EUR"`)
 
 	if err := fs.Parse(args); err != nil {
 		return cliOptions{}, err //nolint:wrapcheck // flag already printed usage to stderr; caller special-cases ErrHelp
@@ -97,13 +114,14 @@ func run(ctx context.Context, o cliOptions, stdout io.Writer) error {
 	reporter := newProgressReporter(o.progressInterval, time.Now())
 	client := wallethttp.New(&http.Client{Timeout: cfg.HTTPTimeout}, cfg.WalletBaseURL, cfg.WalletAPIToken)
 	svc := walletload.New(walletload.Deps{
-		Reader:   walletcsv.New(o.export),
-		Catalog:  client,
-		Records:  client,
-		State:    store,
-		Journal:  store,
-		Waiter:   waiter{},
-		Progress: reporter,
+		Reader:        walletcsv.New(o.export),
+		Catalog:       client,
+		CatalogWriter: client,
+		Records:       client,
+		State:         store,
+		Journal:       store,
+		Waiter:        waiter{},
+		Progress:      reporter,
 	})
 
 	if o.rollback {
@@ -130,7 +148,7 @@ func doLoad(
 	if o.export == "" {
 		return errors.New("--export is required")
 	}
-	accountMap, err := loadAccountMap(o.accountMap)
+	loadOpts, err := buildLoadOptions(o)
 	if err != nil {
 		return err
 	}
@@ -141,15 +159,7 @@ func doLoad(
 		go reporter.runHeartbeat(ctx, done)
 	}
 
-	sum, err := svc.Load(ctx, walletload.LoadOptions{
-		BatchSize:          o.batchSize,
-		Limit:              o.limit,
-		TZOffset:           o.tzOffset,
-		AccountMap:         accountMap,
-		FallbackParent:     o.fallbackParent,
-		FallbackCategoryID: o.fallbackCatID,
-		DryRun:             o.dryRun,
-	})
+	sum, err := svc.Load(ctx, loadOpts)
 	if err != nil {
 		return fmt.Errorf("load: %w", err)
 	}
@@ -166,19 +176,108 @@ func doLoad(
 	return printSummary(stdout, sum, mode)
 }
 
-// printPlanned writes the R5 dry-run line: the work a live load would do.
+// printPlanned writes the R5 dry-run lines: the work a live load would do.
 func printPlanned(stdout io.Writer, sum walletload.Summary) error {
 	records := 0
 	for _, n := range sum.PerAccountPlanned {
 		records += n
 	}
-	_, err := fmt.Fprintf(stdout,
-		"would create %d records across %d accounts; %d custom categories to create\n",
-		records, len(sum.PerAccountPlanned), sum.CategoriesCreated+sum.CategoriesFallback)
-	if err != nil {
+	if _, err := fmt.Fprintf(stdout,
+		"would create %d records across %d accounts (%d new); %d categories to create\n",
+		records, len(sum.PerAccountPlanned), len(sum.AccountsToCreate), len(sum.CategoriesToCreate)); err != nil {
 		return fmt.Errorf("writing planned summary: %w", err)
 	}
+	for _, a := range sum.AccountsToCreate {
+		if _, err := fmt.Fprintf(stdout, "  + account %q (%s, %s, balance %s)\n",
+			a.Name, a.CurrencyCode, a.AccountType, a.InitialBalance); err != nil {
+			return fmt.Errorf("writing planned account: %w", err)
+		}
+	}
+	if len(sum.UnresolvedCategories) > 0 {
+		if _, err := fmt.Fprintf(stdout, "  ! %d categories unresolved: %s\n",
+			len(sum.UnresolvedCategories), strings.Join(sum.UnresolvedCategories, ", ")); err != nil {
+			return fmt.Errorf("writing unresolved categories: %w", err)
+		}
+	}
+	for _, p := range sum.Problems {
+		if _, err := fmt.Fprintf(stdout, "  ! %s\n", p); err != nil {
+			return fmt.Errorf("writing problem: %w", err)
+		}
+	}
 	return nil
+}
+
+// buildLoadOptions assembles the core LoadOptions from the CLI flags, parsing
+// the alias file and the two "Name=value" override lists.
+func buildLoadOptions(o cliOptions) (walletload.LoadOptions, error) {
+	accountMap, err := loadAccountMap(o.accountMap)
+	if err != nil {
+		return walletload.LoadOptions{}, err
+	}
+	aliases, err := loadCategoryAliases(o)
+	if err != nil {
+		return walletload.LoadOptions{}, err
+	}
+	initBal, err := parseKeyVals(o.accountInitialBalance, "--account-initial-balance")
+	if err != nil {
+		return walletload.LoadOptions{}, err
+	}
+	acctCur, err := parseKeyVals(o.accountCurrency, "--account-currency")
+	if err != nil {
+		return walletload.LoadOptions{}, err
+	}
+	return walletload.LoadOptions{
+		BatchSize:             o.batchSize,
+		Limit:                 o.limit,
+		TZOffset:              o.tzOffset,
+		AccountMap:            accountMap,
+		FallbackParent:        o.fallbackParent,
+		FallbackCategoryID:    o.fallbackCatID,
+		DryRun:                o.dryRun,
+		CreateMissing:         o.createMissing,
+		CategoryAliases:       aliases,
+		AccountType:           o.accountType,
+		AccountInitialBalance: initBal,
+		AccountCurrency:       acctCur,
+	}, nil
+}
+
+// loadCategoryAliases resolves the alias file: the explicit --category-alias
+// path, else the default file only when --create-missing is set. An explicitly
+// named file that is missing is an error; the defaulted file is optional.
+func loadCategoryAliases(o cliOptions) ([]walletload.CategoryAlias, error) {
+	path := o.categoryAlias
+	if path == "" {
+		if !o.createMissing {
+			return nil, nil
+		}
+		path = defaultAliasFile
+	}
+	aliases, err := walletcsv.ReadCategoryAlias(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading category alias file: %w", err)
+	}
+	if o.categoryAlias != "" && aliases == nil {
+		return nil, fmt.Errorf("category alias file not found: %s", path)
+	}
+	return aliases, nil
+}
+
+// parseKeyVals parses a "Name=value,Name=value" list into a map.
+func parseKeyVals(s, flagName string) (map[string]string, error) {
+	out := map[string]string{}
+	if strings.TrimSpace(s) == "" {
+		return out, nil
+	}
+	for _, pair := range strings.Split(s, ",") {
+		k, v, ok := strings.Cut(pair, "=")
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if !ok || k == "" || v == "" {
+			return nil, fmt.Errorf("%s: malformed pair %q (want Name=value)", flagName, pair)
+		}
+		out[k] = v
+	}
+	return out, nil
 }
 
 func loadAccountMap(path string) (map[string]string, error) {

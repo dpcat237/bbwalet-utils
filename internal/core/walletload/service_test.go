@@ -21,10 +21,13 @@ type fakeReader struct {
 func (f fakeReader) Read(context.Context) ([]wl.ExportRow, error) { return f.rows, f.err }
 
 type fakeCatalog struct {
-	accounts   []wl.Account
-	categories []wl.Category
-	created    []wl.PlannedCategory
-	err        error
+	accounts      []wl.Account
+	categories    []wl.Category
+	created       []wl.PlannedCategory
+	createdAccts  []wl.CreateAccountInput
+	err           error
+	createAcctErr error
+	createCatErr  error
 }
 
 func (f *fakeCatalog) Accounts(context.Context) ([]wl.Account, error) { return f.accounts, f.err }
@@ -34,8 +37,19 @@ func (f *fakeCatalog) Categories(context.Context) ([]wl.Category, error) {
 }
 
 func (f *fakeCatalog) CreateCustomCategory(_ context.Context, name, parentID string) (wl.Category, error) {
+	if f.createCatErr != nil {
+		return wl.Category{}, f.createCatErr
+	}
 	f.created = append(f.created, wl.PlannedCategory{Name: name, ParentID: parentID})
 	return wl.Category{ID: "new-" + name, Name: name, Custom: true}, nil
+}
+
+func (f *fakeCatalog) CreateAccount(_ context.Context, in wl.CreateAccountInput) (wl.Account, error) {
+	if f.createAcctErr != nil {
+		return wl.Account{}, f.createAcctErr
+	}
+	f.createdAccts = append(f.createdAccts, in)
+	return wl.Account{ID: "new-" + in.Name, Name: in.Name, CurrencyCode: in.CurrencyCode}, nil
 }
 
 type fakeRecords struct {
@@ -175,8 +189,8 @@ func sampleRows() []wl.ExportRow {
 	}
 }
 
-func newService(r wl.ExportReader, c wl.Catalog, rec wl.Records, st wl.ResumeState, j wl.InFlightJournal, w wl.Waiter) *wl.Service {
-	return wl.New(wl.Deps{Reader: r, Catalog: c, Records: rec, State: st, Journal: j, Waiter: w})
+func newService(r wl.ExportReader, c *fakeCatalog, rec wl.Records, st wl.ResumeState, j wl.InFlightJournal, w wl.Waiter) *wl.Service {
+	return wl.New(wl.Deps{Reader: r, Catalog: c, CatalogWriter: c, Records: rec, State: st, Journal: j, Waiter: w})
 }
 
 // newProgressService wires a Service over sampleAccounts/sampleCategories with a
@@ -184,14 +198,16 @@ func newService(r wl.ExportReader, c wl.Catalog, rec wl.Records, st wl.ResumeSta
 func newProgressService(
 	rows []wl.ExportRow, p wl.Progress, rec wl.Records, st wl.ResumeState,
 ) *wl.Service {
+	cat := &fakeCatalog{accounts: sampleAccounts(), categories: sampleCategories()}
 	return wl.New(wl.Deps{
-		Reader:   fakeReader{rows: rows},
-		Catalog:  &fakeCatalog{accounts: sampleAccounts(), categories: sampleCategories()},
-		Records:  rec,
-		State:    st,
-		Journal:  &fakeJournal{},
-		Waiter:   &fakeWaiter{},
-		Progress: p,
+		Reader:        fakeReader{rows: rows},
+		Catalog:       cat,
+		CatalogWriter: cat,
+		Records:       rec,
+		State:         st,
+		Journal:       &fakeJournal{},
+		Waiter:        &fakeWaiter{},
+		Progress:      p,
 	})
 }
 
@@ -524,14 +540,16 @@ func TestService_Load_Progress_NilPortIsNoop(t *testing.T) {
 	t.Parallel()
 
 	rec := &fakeRecords{}
+	cat := &fakeCatalog{accounts: sampleAccounts(), categories: sampleCategories()}
 	svc := wl.New(wl.Deps{
-		Reader:   fakeReader{rows: sampleRows()},
-		Catalog:  &fakeCatalog{accounts: sampleAccounts(), categories: sampleCategories()},
-		Records:  rec,
-		State:    newFakeState(),
-		Journal:  &fakeJournal{},
-		Waiter:   &fakeWaiter{},
-		Progress: nil,
+		Reader:        fakeReader{rows: sampleRows()},
+		Catalog:       cat,
+		CatalogWriter: cat,
+		Records:       rec,
+		State:         newFakeState(),
+		Journal:       &fakeJournal{},
+		Waiter:        &fakeWaiter{},
+		Progress:      nil,
 	})
 
 	sum, err := svc.Load(context.Background(), baseOpts())

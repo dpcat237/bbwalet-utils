@@ -1,0 +1,2 @@
+account;category;currency;amount;ref_currency_amount;type;payment_type;payment_type_local;note;date;gps_latitude;gps_longitude;gps_accuracy_in_meters;warranty_in_month;transfer;payee;labels;envelope_id;custom_category
+Denys USD;Zzzq Unknownthing;USD;-12.00;-12.00;Expenses;CASH;Cash;lunch;2024-02-03 10:27:52;;;;0;false;Shop;;7002;false

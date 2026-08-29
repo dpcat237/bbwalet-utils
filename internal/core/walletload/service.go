@@ -2,6 +2,7 @@ package walletload
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -69,9 +70,6 @@ func (s *Service) Load(ctx context.Context, opts LoadOptions) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
-	if len(an.unmappedAccounts) > 0 {
-		return Summary{}, fmt.Errorf("%w: %s", ErrUnmappedAccount, strings.Join(an.unmappedAccounts, ", "))
-	}
 
 	sum := newSummary()
 	sum.RowsIn = an.rowsIn
@@ -80,8 +78,18 @@ func (s *Service) Load(ctx context.Context, opts LoadOptions) (Summary, error) {
 
 	if opts.DryRun {
 		sum.CategoryMap = an.categoryMap
+		sum.AccountMap = an.accountMap
+		sum.AccountsToCreate = an.toCreateAccounts
+		sum.CategoriesToCreate = an.toCreate
+		sum.UnresolvedCategories = an.unresolvedCats
+		sum.Problems = errStrings(an.problems)
 		countCategoryActions(sum)
+		countAccountActions(sum)
 		return *sum, nil
+	}
+
+	if err := s.guardLive(&an, opts); err != nil {
+		return Summary{}, err
 	}
 
 	s.reportLoadStart(an, sum)
@@ -111,8 +119,53 @@ func (s *Service) reportLoadStart(an analysis, sum *Summary) {
 	})
 }
 
+// guardLive enforces the pre-write invariants for a live load: unmapped
+// accounts, collected analysis problems, and unresolved categories all abort the
+// run before anything is created — unless --fallback-category absorbs the
+// unresolved categories.
+func (s *Service) guardLive(an *analysis, opts LoadOptions) error {
+	if len(an.unmappedAccounts) > 0 {
+		return fmt.Errorf("%w: %s", ErrUnmappedAccount, strings.Join(an.unmappedAccounts, ", "))
+	}
+	if (len(an.toCreate) > 0 || len(an.toCreateAccounts) > 0) && s.deps.CatalogWriter == nil {
+		return errors.New("accounts or categories need creating but no catalogue writer is configured")
+	}
+	if !opts.CreateMissing {
+		return nil
+	}
+	if len(an.problems) > 0 {
+		return errors.Join(an.problems...)
+	}
+	return resolveResidualNone(an, opts.FallbackCategoryID)
+}
+
+// resolveResidualNone fails the run on any still-unresolved category unless a
+// --fallback-category id is set, in which case those rows are relabelled and
+// pointed at it.
+func resolveResidualNone(an *analysis, fallbackID string) error {
+	if len(an.unresolvedCats) == 0 {
+		return nil
+	}
+	if fallbackID == "" {
+		return fmt.Errorf("%w: %s", ErrUnresolvedCategories, strings.Join(an.unresolvedCats, ", "))
+	}
+	relabelNoneFallback(an, fallbackID)
+	an.unresolvedCats = nil
+	return nil
+}
+
 func (s *Service) runLoad(ctx context.Context, an analysis, opts LoadOptions, sum *Summary) error {
 	s.report(ProgressEvent{Kind: ProgressPhase, Phase: PhaseCreatingCategories})
+	if len(an.toCreateAccounts) > 0 {
+		madeAcc, err := s.createAccounts(ctx, an.toCreateAccounts, sum)
+		if err != nil {
+			return err
+		}
+		backfillAccounts(&an, madeAcc)
+	}
+	sum.AccountMap = an.accountMap
+	countAccountActions(sum)
+
 	made, err := s.createCategories(ctx, an.toCreate, sum)
 	if err != nil {
 		return err
@@ -176,6 +229,9 @@ func normaliseOptions(opts LoadOptions) LoadOptions {
 	}
 	if opts.FallbackParent == "" {
 		opts.FallbackParent = "Others"
+	}
+	if opts.AccountType == "" {
+		opts.AccountType = "General"
 	}
 	return opts
 }

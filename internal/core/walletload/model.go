@@ -92,10 +92,13 @@ type CategoryAction string
 
 // Category actions reported in the category map.
 const (
-	CategoryResolved       CategoryAction = "resolved"
-	CategoryCreated        CategoryAction = "created"
-	CategoryFallbackParent CategoryAction = "fallback-parent"
-	CategoryNone           CategoryAction = "none"
+	CategoryResolved           CategoryAction = "resolved"
+	CategoryResolvedNormalised CategoryAction = "resolved-normalised"
+	CategoryResolvedAlias      CategoryAction = "resolved-alias"
+	CategoryCreated            CategoryAction = "created"
+	CategoryFallbackParent     CategoryAction = "fallback-parent"
+	CategoryNone               CategoryAction = "none"
+	CategoryNoneFallback       CategoryAction = "none-fallback"
 )
 
 // CategoryMapping is one row of the category-map report (R3).
@@ -103,6 +106,50 @@ type CategoryMapping struct {
 	ExportCategory string
 	Action         CategoryAction
 	ResolvedID     string
+}
+
+// CategoryAlias maps an export category name to a resolution target: either the
+// name of an existing live category, or "create:<ParentCategoryName>" to create
+// it as a custom subcategory. Parsed from categories-alias.csv.
+type CategoryAlias struct {
+	ExportCategory string
+	Target         string
+}
+
+// CreateCategoryPrefix marks a CategoryAlias.Target that should be created as a
+// custom subcategory under the named system parent.
+const CreateCategoryPrefix = "create:"
+
+// AccountAction records what the loader did with one export account name.
+type AccountAction string
+
+// Account actions reported in the account map.
+const (
+	AccountResolved AccountAction = "resolved"
+	AccountCreated  AccountAction = "created"
+)
+
+// AccountMapping is one row of the account-map report.
+type AccountMapping struct {
+	ExportAccount string
+	Action        AccountAction
+	ResolvedID    string
+}
+
+// CreateAccountInput is the payload for creating a target Wallet account.
+type CreateAccountInput struct {
+	Name           string
+	CurrencyCode   string
+	AccountType    string
+	InitialBalance string // decimal literal; "" is treated as "0"
+}
+
+// PlannedAccount is a target account the loader will create.
+type PlannedAccount struct {
+	Name           string
+	CurrencyCode   string
+	AccountType    string
+	InitialBalance string
 }
 
 // SkipReason explains why a row was diverted to the review file instead of
@@ -175,37 +222,61 @@ type LoadOptions struct {
 	FallbackParent     string // system category name for unmatched custom categories
 	FallbackCategoryID string // used for unmatched non-custom categories; "" = no category
 	DryRun             bool
+
+	// CreateMissing opts in to creating accounts and categories that cannot be
+	// matched. Off (default) preserves the fail-on-unmapped behaviour.
+	CreateMissing bool
+	// CategoryAliases is the parsed categories-alias.csv (may be empty).
+	CategoryAliases []CategoryAlias
+	// AccountType is the accountType for any account the loader creates.
+	AccountType string
+	// AccountInitialBalance overrides the "0" opening balance per export account name.
+	AccountInitialBalance map[string]string
+	// AccountCurrency overrides the inferred currency per export account name.
+	AccountCurrency map[string]string
 }
 
 // Plan is the outcome of validating an export against the live catalogue,
 // without writing anything.
 type Plan struct {
-	Rows               int
-	PerAccountToSend   map[string]int
-	CategoriesToCreate []PlannedCategory
-	CategoryMap        []CategoryMapping
-	Skipped            []SkippedRow
-	UnmappedAccounts   []string
+	Rows                 int
+	PerAccountToSend     map[string]int
+	CategoriesToCreate   []PlannedCategory
+	CategoryMap          []CategoryMapping
+	AccountsToCreate     []PlannedAccount
+	AccountMap           []AccountMapping
+	Skipped              []SkippedRow
+	UnmappedAccounts     []string
+	UnresolvedCategories []string
+	Problems             []string // ambiguous currency / bad alias / missing parent
 }
 
 // Summary is the load or rollback report (R8).
 type Summary struct {
-	RowsIn             int
-	Skipped            map[SkipReason]int
-	SkippedRows        []SkippedRow
-	PerAccountCreated  map[string]int
-	CategoriesResolved int
-	CategoriesCreated  int
-	CategoriesFallback int
-	CategoriesNone     int
-	CategoryMap        []CategoryMapping
-	PerAccountPlanned  map[string]int // sendable rows per account (set for dry-run and live)
-	Requests           int
-	Retries            int
-	RateLimitHits      int
-	Deleted            int
-	Orphans            []string
-	Failures           []RecordResult
+	RowsIn                 int
+	Skipped                map[SkipReason]int
+	SkippedRows            []SkippedRow
+	PerAccountCreated      map[string]int
+	AccountsResolved       int
+	AccountsCreated        int
+	AccountMap             []AccountMapping
+	AccountsToCreate       []PlannedAccount  // set for dry-run: accounts a live run would create
+	CategoriesToCreate     []PlannedCategory // set for dry-run: distinct categories a live run would create
+	CategoriesResolved     int
+	CategoriesCreated      int
+	CategoriesFallback     int
+	CategoriesNone         int
+	CategoriesNoneFallback int
+	CategoryMap            []CategoryMapping
+	UnresolvedCategories   []string       // set for dry-run: categories still unresolved
+	Problems               []string       // set for dry-run: ambiguous currency / bad alias / missing parent
+	PerAccountPlanned      map[string]int // sendable rows per account (set for dry-run and live)
+	Requests               int
+	Retries                int
+	RateLimitHits          int
+	Deleted                int
+	Orphans                []string
+	Failures               []RecordResult
 }
 
 func newSummary() *Summary {

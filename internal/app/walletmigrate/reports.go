@@ -83,6 +83,13 @@ func reviewRows(sum walletload.Summary) [][]string {
 func summaryText(sum walletload.Summary) []byte {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "rows in:             %d\n", sum.RowsIn)
+	if len(sum.AccountMap) > 0 {
+		fmt.Fprintf(&b, "accounts resolved:   %d\n", sum.AccountsResolved)
+		fmt.Fprintf(&b, "accounts created:    %d\n", sum.AccountsCreated)
+		for _, m := range sum.AccountMap {
+			fmt.Fprintf(&b, "  %-26s %s\n", m.ExportAccount, m.Action)
+		}
+	}
 	fmt.Fprintf(&b, "records created:     %d\n", totalCreated(sum))
 	for _, acc := range sortedIntKeys(sum.PerAccountCreated) {
 		fmt.Fprintf(&b, "  %-26s %d\n", acc, sum.PerAccountCreated[acc])

@@ -1,0 +1,5 @@
+{
+  "records": [
+    {"id": "r3", "amount": {"value": "-5.00", "currencyCode": "USD"}, "category": {"name": "Pharmacy"}, "convertedAmount": {"value": "-4.50", "currencyCode": "EUR", "ratio": "0.900000"}, "recordDate": "2022-02-01T12:00:00Z", "source": "rest", "accountId": "acc-usd", "accountName": "Denys USD"}
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "records": [
+    {"id": "r1", "amount": {"value": "-12.00", "currencyCode": "USD"}, "recordDate": "not-a-date"}
+  ]
+}

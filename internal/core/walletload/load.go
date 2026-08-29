@@ -12,6 +12,37 @@ import (
 	"time"
 )
 
+// --- account creation ------------------------------------------------------
+
+func (s *Service) createAccounts(
+	ctx context.Context, toCreate []PlannedAccount, sum *Summary,
+) (map[string]string, error) {
+	made := make(map[string]string, len(toCreate))
+	for _, a := range toCreate {
+		sum.Requests++
+		acc, err := s.deps.CatalogWriter.CreateAccount(ctx, CreateAccountInput(a))
+		if err != nil {
+			return nil, fmt.Errorf("creating account %q: %w", a.Name, err)
+		}
+		made[strings.ToLower(a.Name)] = acc.ID
+	}
+	return made, nil
+}
+
+func backfillAccounts(an *analysis, made map[string]string) {
+	for i := range an.rows {
+		if id, ok := made[an.rows[i].pendingAccount]; ok {
+			an.rows[i].accountID = id
+			an.rows[i].pendingAccount = ""
+		}
+	}
+	for i := range an.accountMap {
+		if id, ok := made[strings.ToLower(an.accountMap[i].ExportAccount)]; ok {
+			an.accountMap[i].ResolvedID = id
+		}
+	}
+}
+
 // --- category creation -------------------------------------------------------
 
 func (s *Service) createCategories(
@@ -20,7 +51,7 @@ func (s *Service) createCategories(
 	made := make(map[string]string, len(toCreate))
 	for _, c := range toCreate {
 		sum.Requests++
-		cat, err := s.deps.Catalog.CreateCustomCategory(ctx, c.Name, c.ParentID)
+		cat, err := s.deps.CatalogWriter.CreateCustomCategory(ctx, c.Name, c.ParentID)
 		if err != nil {
 			return nil, fmt.Errorf("creating custom category %q: %w", c.Name, err)
 		}
@@ -37,7 +68,11 @@ func backfillCategories(an *analysis, made map[string]string) {
 		}
 	}
 	for i := range an.categoryMap {
-		if id, ok := made[strings.ToLower(an.categoryMap[i].ExportCategory)]; ok {
+		canon, ok := an.catCanonical[strings.ToLower(an.categoryMap[i].ExportCategory)]
+		if !ok {
+			continue
+		}
+		if id, ok := made[canon]; ok {
 			an.categoryMap[i].Action = CategoryCreated
 			an.categoryMap[i].ResolvedID = id
 		}
@@ -370,22 +405,37 @@ func newBatch(accountID string, chunk []RecordInput) Batch {
 
 func toPlan(an analysis) Plan {
 	p := Plan{
-		Rows:               an.rowsIn,
-		PerAccountToSend:   map[string]int{},
-		CategoriesToCreate: an.toCreate,
-		CategoryMap:        an.categoryMap,
-		UnmappedAccounts:   an.unmappedAccounts,
+		Rows:                 an.rowsIn,
+		PerAccountToSend:     map[string]int{},
+		CategoriesToCreate:   an.toCreate,
+		CategoryMap:          an.categoryMap,
+		AccountsToCreate:     an.toCreateAccounts,
+		AccountMap:           an.accountMap,
+		UnmappedAccounts:     an.unmappedAccounts,
+		UnresolvedCategories: an.unresolvedCats,
+		Problems:             errStrings(an.problems),
 	}
 	for _, ar := range an.rows {
 		if ar.skip != nil {
 			p.Skipped = append(p.Skipped, *ar.skip)
 			continue
 		}
-		if ar.accountID != "" {
+		if ar.accountID != "" || ar.pendingAccount != "" {
 			p.PerAccountToSend[ar.row.Account]++
 		}
 	}
 	return p
+}
+
+func errStrings(errs []error) []string {
+	if len(errs) == 0 {
+		return nil
+	}
+	out := make([]string, len(errs))
+	for i, e := range errs {
+		out[i] = e.Error()
+	}
+	return out
 }
 
 func fillSkipSummary(sum *Summary, an analysis) {
@@ -401,7 +451,7 @@ func fillSkipSummary(sum *Summary, an analysis) {
 // dry-run and live loads alike so a dry-run Summary describes the planned work.
 func fillPlannedSummary(sum *Summary, an analysis) {
 	for _, ar := range an.rows {
-		if ar.skip == nil && ar.accountID != "" {
+		if ar.skip == nil && (ar.accountID != "" || ar.pendingAccount != "") {
 			sum.PerAccountPlanned[ar.row.Account]++
 		}
 	}
@@ -422,7 +472,7 @@ func accountNames(an analysis) map[string]string {
 func countCategoryActions(sum *Summary) {
 	for _, m := range sum.CategoryMap {
 		switch m.Action {
-		case CategoryResolved:
+		case CategoryResolved, CategoryResolvedNormalised, CategoryResolvedAlias:
 			sum.CategoriesResolved++
 		case CategoryCreated:
 			sum.CategoriesCreated++
@@ -430,6 +480,38 @@ func countCategoryActions(sum *Summary) {
 			sum.CategoriesFallback++
 		case CategoryNone:
 			sum.CategoriesNone++
+		case CategoryNoneFallback:
+			sum.CategoriesNoneFallback++
+		}
+	}
+}
+
+func countAccountActions(sum *Summary) {
+	for _, m := range sum.AccountMap {
+		switch m.Action {
+		case AccountResolved:
+			sum.AccountsResolved++
+		case AccountCreated:
+			sum.AccountsCreated++
+		}
+	}
+}
+
+// relabelNoneFallback rewrites every still-"none" category mapping to
+// "none-fallback" once a --fallback-category id is in play, and points its rows
+// at that id.
+func relabelNoneFallback(an *analysis, fallbackID string) {
+	none := map[string]bool{}
+	for i := range an.categoryMap {
+		if an.categoryMap[i].Action == CategoryNone {
+			an.categoryMap[i].Action = CategoryNoneFallback
+			an.categoryMap[i].ResolvedID = fallbackID
+			none[strings.ToLower(an.categoryMap[i].ExportCategory)] = true
+		}
+	}
+	for i := range an.rows {
+		if none[strings.ToLower(an.rows[i].row.Category)] {
+			an.rows[i].categoryID = fallbackID
 		}
 	}
 }

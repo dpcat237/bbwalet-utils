@@ -1,0 +1,7 @@
+{
+  "records": [
+    {"id": "r1", "amount": {"value": "-12.00", "currencyCode": "USD"}, "category": {"name": "Food"}, "convertedAmount": {"value": "-11.00", "currencyCode": "EUR", "ratio": "0.916667"}, "recordDate": "2020-01-15T10:00:00Z", "source": "rest", "accountId": "acc-usd", "accountName": "Denys USD"},
+    {"id": "r2", "amount": {"value": "100.00", "currencyCode": "USD"}, "category": {"name": "Salary"}, "recordDate": "2021-06-09T08:00:00Z", "source": "rest", "accountId": "acc-usd", "accountName": "Denys USD"}
+  ],
+  "nextOffset": 200
+}

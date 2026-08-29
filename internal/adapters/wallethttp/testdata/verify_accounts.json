@@ -1,0 +1,6 @@
+{
+  "accounts": [
+    {"id": "acc-eur", "name": "Denys EUR", "currencyCode": "EUR"},
+    {"id": "acc-usd", "name": "Denys USD", "currencyCode": "USD"}
+  ]
+}

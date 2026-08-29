@@ -1,8 +1,9 @@
 // Package walletcsv reads a BudgetBakers Wallet CSV export (semicolon-delimited,
-// 19-column format) and turns it into core walletload.ExportRow values. It
-// addresses every field by header name so the two known column orderings parse
-// identically, and it performs no validation beyond parsing — classification is
-// the core's job.
+// 19-column format). Reader turns it into core walletload.ExportRow values for
+// the loader; ArchiveReader (archive.go) turns it into walletverify.ArchiveRow
+// values for the verifier. It addresses every field by header name so the two
+// known column orderings parse identically, and it performs no validation
+// beyond parsing — classification is the core's job.
 package walletcsv
 
 import (
@@ -35,6 +36,8 @@ func New(path string) *Reader {
 
 // Read parses the whole export. It returns core.ErrExportUnreadable on an
 // open/parse failure and core.ErrUnknownHeader when a required column is absent.
+//
+//nolint:dupl // deliberately parallel to ArchiveReader.Read: same CSV shape, different target type and error identity.
 func (r *Reader) Read(_ context.Context) ([]core.ExportRow, error) {
 	data, err := os.ReadFile(r.path)
 	if err != nil {

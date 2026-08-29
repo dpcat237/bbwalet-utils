@@ -8,3 +8,7 @@
 .env.local
 # shared dev overrides — gitignored because it may hold a real Wallet API token
 .env.dev
+# disposable-Wallet token for the gated `make test-e2e` lane
+.env.e2e
+# logs
+out

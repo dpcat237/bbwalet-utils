@@ -1,0 +1,90 @@
+name,group,custom,system_id
+Advisory,Financial expenses,False,financial_expenses__advisory
+Aliments (Financial expenses),Financial expenses,False,financial_expenses__aliments
+"Charges, fees",Financial expenses,False,financial_expenses__charges_fees
+Financial expenses,Financial expenses,False,financial_expenses__general
+Fines,Financial expenses,False,financial_expenses__fines
+Insurances,Financial expenses,False,financial_expenses__insurances
+"Loan, interests",Financial expenses,False,financial_expenses__loan_interests
+Savings,Financial expenses,False,investments__savings
+Taxes,Financial expenses,False,financial_expenses__taxes
+Bar cafe,Food & Drinks,False,food_and_drinks__bar_cafe
+Food & Drinks,Food & Drinks,False,food_and_drinks__general
+Groceries,Food & Drinks,False,food_and_drinks__groceries
+Restaurants & fast food,Food & Drinks,False,food_and_drinks__restaurants_fast_food
+Energy & utilities,Housing,False,housing__energy_utilities
+Housing,Housing,False,housing__general
+Insurance (Housing),Housing,False,housing__insurance
+Maintenance & repairs,Housing,False,housing__maintenance_repairs
+Mortgage,Housing,False,housing__mortgage
+Rent,Housing,False,housing__rent
+Services,Housing,False,housing__services
+Aliments (Income),Income,False,income__aliments
+"Checks, coupons",Income,False,income__checks_coupons
+"Dues, grants",Income,False,income__dues_grants
+Gifts,Income,False,income__gifts
+Income,Income,False,income__general
+"Interest, dividends",Income,False,income__interest_dividends
+"Lending, renting",Income,False,income__lending_renting
+"Lottery, gambling (Income)",Income,False,income__lottery_gambling
+Refunds,Income,False,income__refunds
+"Rental, income",Income,False,income__rental_income
+Sale,Income,False,income__sale
+"Wage, invoices",Income,False,income__wage_invoices
+Collections,Investments,False,investments__collections
+Fin. investments,Investments,False,investments__fin_investments
+Investments,Investments,False,investments__general
+Realty,Investments,False,investments__realty
+"Vehicles, chattels",Investments,False,investments__vehicles_chattels
+"Active sport, fitness",Life & Entertainment,False,life_entertainment__active_sport_fitness
+"Alcohol, tobacco",Life & Entertainment,False,life_entertainment__alcohol_tobacco
+"Books, audio, subscription",Life & Entertainment,False,life_entertainment__books_audio_subscription
+"Charity, gifts",Life & Entertainment,False,life_entertainment__charity_gifts
+"Culture, sport events",Life & Entertainment,False,life_entertainment__culture_sport_events
+Education & development,Life & Entertainment,False,life_entertainment__education_development
+Health care & doctor,Life & Entertainment,False,life_entertainment__health_care_doctor
+Hobbies,Life & Entertainment,False,life_entertainment__hobbies
+"Holidays, trips, hotels",Life & Entertainment,False,life_entertainment__holidays_trips_hotels
+Life & Entertainment,Life & Entertainment,False,life_entertainment__general
+Life events,Life & Entertainment,False,life_entertainment__life_events
+"Lottery, gambling (Life & Entertainment)",Life & Entertainment,False,life_entertainment__lottery_gambling
+"Tv, streaming",Life & Entertainment,False,life_entertainment__tv_streaming
+Wellness & beauty,Life & Entertainment,False,life_entertainment__wellness_beauty
+Missing,Others,False,others__missing
+Others,Others,False,others__general
+Internet,"PC, Communication",False,communication_pc__internet
+"PC, Communication","PC, Communication",False,communication_pc__general
+"Phone, cell phones","PC, Communication",False,communication_pc__phone_cell_phones
+Postal services,"PC, Communication",False,communication_pc__postal_services
+"Software, apps, games","PC, Communication",False,communication_pc__software_apps_games
+Clothes & shoes,Shopping,False,shopping__clothes_shoes
+Department Stores,Shopping,False,shopping__department_stores
+Drugstore,Shopping,False,shopping__drugstore
+Electronics & accessories,Shopping,False,shopping__electronics_accessories
+Free time,Shopping,False,shopping__free_time
+Gifts & joy,Shopping,False,shopping__gifts_joy
+Health & beauty,Shopping,False,shopping__health_beauty
+Home & garden,Shopping,False,shopping__home_garden
+Jewels & accessories,Shopping,False,shopping__jewels_accessories
+Kids,Shopping,False,shopping__kids
+Pets & animals,Shopping,False,shopping__pets_animals
+Shopping,Shopping,False,shopping__general
+Stationery & tools,Shopping,False,shopping__stationery_tools
+Debt,System categories,False,system_categories__debt
+Shopping list,System categories,False,system_categories__shopping_list
+Transfer,System categories,False,system_categories__transfer
+Uncategorized,System categories,False,system_categories__unknown
+Business trips,Transportation,False,transportation__business_trips
+Long distance,Transportation,False,transportation__long_distance
+Public transport,Transportation,False,transportation__public_transport
+Taxi,Transportation,False,transportation__taxi
+Transportation,Transportation,False,transportation__general
+Unknown expense,Unknown,False,unknown_records__expense
+Unknown income,Unknown,False,unknown_records__income
+Fuel,Vehicle,False,vehicle__fuel
+Insurance (Vehicle),Vehicle,False,vehicle__insurance
+Leasing,Vehicle,False,vehicle__leasing
+Parking,Vehicle,False,vehicle__parking
+Rentals,Vehicle,False,vehicle__rentals
+Vehicle,Vehicle,False,vehicle__general
+Vehicle maintenance,Vehicle,False,vehicle__vehicle_maintenance

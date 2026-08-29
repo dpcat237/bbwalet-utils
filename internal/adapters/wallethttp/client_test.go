@@ -2,6 +2,7 @@ package wallethttp_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -138,6 +139,46 @@ func TestClient_CreateCustomCategory(t *testing.T) {
 	require.True(t, got.Custom)
 }
 
+func TestClient_CreateAccount_SendsFieldsAndMapsResponse(t *testing.T) {
+	t.Parallel()
+
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/v1/api/accounts", r.URL.Path)
+		require.True(t, strings.HasPrefix(r.Header.Get("Authorization"), "Bearer "))
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.WriteHeader(http.StatusCreated)
+		b, err := os.ReadFile(filepath.Join("testdata", "create_account.json"))
+		require.NoError(t, err)
+		_, _ = w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+	c := wallethttp.New(&http.Client{Timeout: 5 * time.Second}, srv.URL, testToken)
+
+	got, err := c.CreateAccount(context.Background(), core.CreateAccountInput{
+		Name: "Denys USD", CurrencyCode: "USD", AccountType: "General", InitialBalance: "",
+	})
+	require.NoError(t, err)
+	require.Equal(t, core.Account{ID: "acc-new-1", Name: "Denys USD", CurrencyCode: "USD"}, got)
+
+	require.Equal(t, "Denys USD", gotBody["name"])
+	require.Equal(t, "General", gotBody["accountType"])
+	require.Equal(t, "USD", gotBody["currencyCode"])
+	require.EqualValues(t, 0, gotBody["initialBalance"], "empty InitialBalance defaults to 0")
+}
+
+func TestClient_CreateAccount_Unauthorized(t *testing.T) {
+	t.Parallel()
+
+	c := newClient(t, map[string]route{
+		"POST /v1/api/accounts": {status: 401, fixture: "error_401.json"},
+	})
+
+	_, err := c.CreateAccount(context.Background(), core.CreateAccountInput{Name: "X", CurrencyCode: "EUR"})
+	require.ErrorIs(t, err, core.ErrUnauthorized)
+}
+
 func TestClient_CreateRecords_AllOK(t *testing.T) {
 	t.Parallel()
 
@@ -267,6 +308,28 @@ func TestClient_DeleteRecords_RetriesOn429(t *testing.T) {
 	got, err := c.DeleteRecords(context.Background(), []string{"rec-1", "rec-2"})
 	require.NoError(t, err)
 	require.Len(t, got, 2)
+}
+
+// A sustained 429 with "Retry-After: 0" (seen live against the Wallet limiter
+// during a --create-missing run) must not blow through the retry budget in
+// milliseconds: creation survives more consecutive 429s than the old cap of 3.
+func TestClient_CreateCustomCategory_RetriesSustained429(t *testing.T) {
+	t.Parallel()
+
+	zero := map[string]string{"Retry-After": "0"}
+	c := seqClient(t, map[string][]route{
+		"POST /v1/api/categories/custom": {
+			{status: 429, fixture: "error_429.json", headers: zero},
+			{status: 429, fixture: "error_429.json", headers: zero},
+			{status: 429, fixture: "error_429.json", headers: zero},
+			{status: 429, fixture: "error_429.json", headers: zero},
+			{status: 201, fixture: "category_created.json"},
+		},
+	})
+
+	got, err := c.CreateCustomCategory(context.Background(), "Buy house", "cat-housing")
+	require.NoError(t, err)
+	require.Equal(t, "new-cat-1", got.ID)
 }
 
 func TestClient_NoTokenInErrorOutput(t *testing.T) {

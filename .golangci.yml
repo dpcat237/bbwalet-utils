@@ -8,6 +8,9 @@ run:
   issues-exit-code: 1
   tests: true
   allow-parallel-runners: false
+  # Lint the `e2e`-tagged live tests too (they never run in `make test`).
+  build-tags:
+    - e2e
 output:
   path-prefix: ""
 linters:

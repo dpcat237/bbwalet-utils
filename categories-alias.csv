@@ -1,0 +1,60 @@
+export_category,target,note
+Advertisement,"create:Charges, Fees",user custom -> new subcategory
+Animation,create:Income,user custom -> new subcategory
+Art sale,create:Income,user custom -> new subcategory
+Art studio,create:Income,user custom -> new subcategory
+Bank charges,create:Financial expenses,user custom -> new subcategory
+Banya,Wellness & beauty,merged into Wellness & beauty
+Bonus program,"Charges, Fees","merged into Charges, Fees"
+Books,"Books, audio, subscription",match (rename/ambiguous)
+Buy house,Mortgage,merged into Mortgage
+Car accessories,create:Vehicle,user custom -> new subcategory
+Charity,"Charity, gifts",match (rename/ambiguous)
+Cinema,"Culture, sport events","merged into Culture, sport events"
+Cleaning,create:Services,user custom -> new subcategory
+Co-working,create:Rent,user custom -> new subcategory
+Construction materials,create:Maintenance & repairs,user custom -> new subcategory
+Construction service,create:Maintenance & repairs,user custom -> new subcategory
+Cosmetics,create:Health & beauty,user custom -> new subcategory
+Documents,"create:Charges, Fees",user custom -> new subcategory
+Documents for car,create:Vehicle,user custom -> new subcategory
+Donation,"Charity, gifts",match (rename/ambiguous)
+Driving fine,create:Vehicle,user custom -> new subcategory
+"Drug-store, chemist",Drugstore,match (rename/ambiguous)
+Electric station,create:Fuel,user custom -> new subcategory
+Employees,create:Advisory,user custom -> new subcategory
+Financial investments,Fin. investments,match (rename/ambiguous)
+Flowers,Gifts & joy,match (rename/ambiguous)
+Games,"Software, apps, games",match (rename/ambiguous)
+Garden,Gardening,merged into Gardening
+Gardening,create:Home & garden,user custom -> new subcategory (Garden folds in here)
+Health insurance,Insurances,match (rename/ambiguous)
+Highway toll,Highway tolls,merged into Highway tolls
+Highway tolls,create:Fuel,user custom -> new subcategory (Highway toll folds in here)
+House,create:Home & garden,user custom -> new subcategory
+House & garden,Home & garden,match (rename/ambiguous)
+House taxes,create:Services,user custom -> new subcategory
+Insurance,Insurances,match (rename/ambiguous)
+Language classes,Education & development,match (rename/ambiguous)
+Laundry,create:Services,user custom -> new subcategory
+Lawyer,create:Advisory,user custom -> new subcategory
+Loan car,"create:Loan, interests",user custom -> new subcategory
+"Lottery, gambling","Lottery, gambling (Life & Entertainment)",match (rename/ambiguous)
+New real estate,Realty,merged into Realty
+Notary,create:Advisory,user custom -> new subcategory
+Pension,create:Fin. investments,user custom -> new subcategory
+Pet hotel,create:Rent,user custom -> new subcategory
+Pets groceries,create:Groceries,user custom -> new subcategory
+Pharmacy,create:Drugstore,user custom -> new subcategory
+Property insurance,create:Services,user custom -> new subcategory
+Quest room,"Culture, sport events","merged into Culture, sport events"
+Repair,Construction materials,merged into Construction materials
+Return debt,"Loan, interests","merged into Loan, interests"
+Software,"Software, apps, games",match (rename/ambiguous)
+Taxes manager,create:Advisory,user custom -> new subcategory
+Toilet,Wellness & beauty,merged into Wellness & beauty
+Vehicle cleaning,create:Vehicle maintenance,user custom -> new subcategory
+Vehicle insurance,Insurance (Vehicle),match (rename/ambiguous)
+Vehicle taxes,create:Vehicle,user custom -> new subcategory
+Vet,Veterinary,merged into Veterinary
+Veterinary,create:Health care & doctor,user custom -> new subcategory (Vet folds in here)
