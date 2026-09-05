@@ -54,6 +54,8 @@ func TestService_Plan_CategoryTiers(t *testing.T) {
 			[]wl.CategoryAlias{{ExportCategory: "Charity", Target: "Charity, gifts"}}, wl.CategoryResolvedAlias},
 		{"alias create", "Banya", true,
 			[]wl.CategoryAlias{{ExportCategory: "Banya", Target: "create:Others"}}, wl.CategoryFallbackParent},
+		{"alias create but category already exists -> resolved (idempotent re-run)", "Health care & doctor", true,
+			[]wl.CategoryAlias{{ExportCategory: "Health care & doctor", Target: "create:Others"}}, wl.CategoryResolved},
 		{"ambiguous normalized -> none without alias", "Lottery, gambling", false, nil, wl.CategoryNone},
 		{"ambiguous resolved by alias", "Lottery, gambling", false,
 			[]wl.CategoryAlias{{ExportCategory: "Lottery, gambling", Target: "Lottery, gambling (Income)"}},
@@ -102,6 +104,79 @@ func TestService_Load_CreatesAccountFromExport(t *testing.T) {
 	require.Equal(t, 1, sum.AccountsCreated)
 	require.Equal(t, 1, sum.Skipped[wl.SkipForeignCurrency], "the EUR row is diverted")
 	require.Len(t, rec.createCalls, 1, "the USD row is sent to the new account")
+}
+
+// A re-run after an interrupted load (or after a Wallet data reset, which keeps
+// custom categories) must not re-create categories a `create:` alias row points
+// at — it resolves them by name and creates nothing.
+func TestService_Load_CreateAliasIsIdempotentWhenCategoryExists(t *testing.T) {
+	t.Parallel()
+
+	rows := []wl.ExportRow{
+		{RowKey: "r1", Account: "Denys EUR", Category: "Advertisement", Currency: "EUR", Amount: "-10.00", Date: at("2021-01-01 10:00:00"), CustomCategory: true},
+	}
+	// "Advertisement" already exists live (a prior run created it).
+	cat := &fakeCatalog{
+		accounts:   sampleAccounts(),
+		categories: append(liveCats(), wl.Category{ID: "c-adv", Name: "Advertisement", Custom: true}),
+	}
+	rec := &fakeRecords{}
+	svc := newService(fakeReader{rows: rows}, cat, rec, newFakeState(), &fakeJournal{}, &fakeWaiter{})
+
+	opts := createOpts()
+	opts.CategoryAliases = []wl.CategoryAlias{{ExportCategory: "Advertisement", Target: "create:Others"}}
+
+	sum, err := svc.Load(context.Background(), opts)
+	require.NoError(t, err)
+	require.Empty(t, cat.created, "no category is created when one with that name already exists")
+	require.Equal(t, 0, sum.CategoriesCreated)
+	require.Len(t, rec.createCalls, 1)
+	require.Equal(t, "c-adv", rec.createCalls[0][0].CategoryID, "the row uses the existing category id")
+}
+
+// GET /categories lags POST /categories/custom, so a re-run can re-plan a
+// category the previous run already created; the POST then 400s with
+// name_conflict. That must be adopted (use the existing id), not fatal.
+func TestService_Load_CreateCategory_AdoptsExistingOnNameConflict(t *testing.T) {
+	t.Parallel()
+
+	rows := []wl.ExportRow{
+		{RowKey: "r1", Account: "Denys EUR", Category: "Banya", Currency: "EUR", Amount: "-10.00", Date: at("2021-01-01 10:00:00"), CustomCategory: true},
+	}
+	cat := &fakeCatalog{
+		accounts:     sampleAccounts(),
+		categories:   liveCats(), // "Banya" absent -> planned for create
+		createCatErr: &wl.ErrAlreadyExists{ID: "c-race"},
+	}
+	rec := &fakeRecords{}
+	svc := newService(fakeReader{rows: rows}, cat, rec, newFakeState(), &fakeJournal{}, &fakeWaiter{})
+	opts := createOpts()
+	opts.CategoryAliases = []wl.CategoryAlias{{ExportCategory: "Banya", Target: "create:Others"}}
+
+	_, err := svc.Load(context.Background(), opts)
+	require.NoError(t, err, "name_conflict on create is adopted, not fatal")
+	require.Len(t, rec.createCalls, 1)
+	require.Equal(t, "c-race", rec.createCalls[0][0].CategoryID)
+}
+
+func TestService_Load_CreateAccount_AdoptsExistingOnNameConflict(t *testing.T) {
+	t.Parallel()
+
+	rows := []wl.ExportRow{
+		{RowKey: "a1", Account: "Denys USD", Category: "Food & Drinks", Currency: "USD", Amount: "-4.00", Date: at("2021-01-01 10:00:00")},
+	}
+	cat := &fakeCatalog{
+		accounts:      nil, // "Denys USD" planned for create
+		categories:    liveCats(),
+		createAcctErr: &wl.ErrAlreadyExists{ID: "a-existing"},
+	}
+	rec := &fakeRecords{}
+	svc := newService(fakeReader{rows: rows}, cat, rec, newFakeState(), &fakeJournal{}, &fakeWaiter{})
+
+	_, err := svc.Load(context.Background(), createOpts())
+	require.NoError(t, err)
+	require.Len(t, rec.createCalls, 1)
+	require.Equal(t, "a-existing", rec.createCalls[0][0].AccountID)
 }
 
 func TestService_Load_AliasChainMergesToOneCategory(t *testing.T) {

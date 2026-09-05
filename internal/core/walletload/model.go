@@ -194,6 +194,7 @@ type LoadPhase string
 // Load phases reported through the Progress port.
 const (
 	PhaseLoadingCatalogue   LoadPhase = "loading-catalogue"
+	PhaseCreatingAccounts   LoadPhase = "creating-accounts"
 	PhaseCreatingCategories LoadPhase = "creating-categories"
 	PhaseCreatingRecords    LoadPhase = "creating-records"
 	PhaseWaitingRateLimited LoadPhase = "waiting-rate-limited"
@@ -204,8 +205,8 @@ type ProgressEvent struct {
 	Kind          ProgressKind
 	Phase         LoadPhase
 	Account       string // export account name in progress ("" when N/A)
-	Created       int    // cumulative records committed this run
-	Total         int    // records still to send from this run's start point
+	Created       int    // cumulative items done in the current phase (records committed, or accounts/categories created)
+	Total         int    // items the current phase will do (records to send, or accounts/categories to create)
 	AlreadyLoaded int    // rows already committed and skipped (set on ProgressStart)
 	Requests      int
 	Retries       int

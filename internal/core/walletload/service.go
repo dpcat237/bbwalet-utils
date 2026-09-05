@@ -155,8 +155,8 @@ func resolveResidualNone(an *analysis, fallbackID string) error {
 }
 
 func (s *Service) runLoad(ctx context.Context, an analysis, opts LoadOptions, sum *Summary) error {
-	s.report(ProgressEvent{Kind: ProgressPhase, Phase: PhaseCreatingCategories})
 	if len(an.toCreateAccounts) > 0 {
+		s.report(ProgressEvent{Kind: ProgressPhase, Phase: PhaseCreatingAccounts})
 		madeAcc, err := s.createAccounts(ctx, an.toCreateAccounts, sum)
 		if err != nil {
 			return err
@@ -166,6 +166,7 @@ func (s *Service) runLoad(ctx context.Context, an analysis, opts LoadOptions, su
 	sum.AccountMap = an.accountMap
 	countAccountActions(sum)
 
+	s.report(ProgressEvent{Kind: ProgressPhase, Phase: PhaseCreatingCategories})
 	made, err := s.createCategories(ctx, an.toCreate, sum)
 	if err != nil {
 		return err

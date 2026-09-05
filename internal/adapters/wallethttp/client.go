@@ -13,10 +13,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	core "github.com/dpcat237/bbwalet-utils/internal/core/walletload"
@@ -38,10 +41,10 @@ const (
 	// answers a sustained limit with "Retry-After: 0"; without this floor the
 	// retry loop would burn every attempt in milliseconds and fail hard.
 	defaultRetryAfter = 3 * time.Second
-	// pacingThreshold: when the server reports this many requests or fewer left
+	// pacingThreshold: (seconds) when the server reports this many requests or fewer left
 	// in the window, slow down pre-emptively instead of racing into a 429.
-	pacingThreshold = 60
-	pacingPause     = 5 * time.Second
+	pacingThreshold = 60 * 15
+	pacingPause     = 10 * time.Minute
 )
 
 // Client talks to one Wallet API base URL with one bearer token.
@@ -346,25 +349,59 @@ func (c *Client) send(ctx context.Context, method, path string, q url.Values, re
 	return nil
 }
 
-// doRetrying wraps do with bounded automatic retries on 429, honouring
-// Retry-After. Use it for idempotent calls; record creation stays on do so the
-// core owns its retry accounting.
+// doRetrying wraps do with bounded automatic retries on a 429 (honouring
+// Retry-After) or a transient transport failure (EOF / connection reset /
+// timeout — the round trip never reached the server, so a retry is safe; a
+// create that did land is caught by the name_conflict handling in the core).
+// Use it for idempotent calls and for account/custom-category creation; record
+// creation stays on do so the core owns its retry accounting.
 func (c *Client) doRetrying(
 	ctx context.Context, method, path string, q url.Values, reqBody any,
 ) (int, []byte, error) {
 	for attempt := 0; ; attempt++ {
 		status, data, err := c.do(ctx, method, path, q, reqBody)
+		if err == nil {
+			return status, data, nil
+		}
+
+		var wait time.Duration
+		var reason string
 		var rl *core.ErrRateLimited
-		if !errors.As(err, &rl) || attempt >= maxGetRetries {
+		switch {
+		case errors.As(err, &rl):
+			wait, reason = rl.RetryAfter, "get-429"
+		case isTransientTransport(err):
+			wait, reason = defaultRetryAfter<<min(attempt, 3), "transport"
+		default:
+			return status, data, err
+		}
+		if attempt >= maxGetRetries {
 			return status, data, err
 		}
 		slog.Info("progress",
 			"phase", string(core.PhaseWaitingRateLimited),
-			"reason", "get-429", "wait", rl.RetryAfter)
-		if werr := sleepCtx(ctx, rl.RetryAfter); werr != nil {
+			"reason", reason, "wait", wait)
+		if werr := sleepCtx(ctx, wait); werr != nil {
 			return 0, nil, werr
 		}
 	}
+}
+
+// isTransientTransport reports whether err is a connection-level failure worth
+// retrying (the request did not get a response). Context cancellation and
+// deadline are never transient.
+func isTransientTransport(err error) bool {
+	if err == nil ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne)
 }
 
 // do performs one HTTP round trip and returns the status and the (bounded) body.
@@ -469,7 +506,31 @@ func statusError(status int, body []byte) error {
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return core.ErrUnauthorized
 	}
+	if status == http.StatusBadRequest || status == http.StatusConflict {
+		if id, ok := nameConflict(body); ok {
+			return &core.ErrAlreadyExists{ID: id}
+		}
+	}
 	return fmt.Errorf("wallet api status %d: %s", status, snippet(body))
+}
+
+var conflictIDRe = regexp.MustCompile(`id:\s*([0-9a-fA-F-]{36})`)
+
+// nameConflict reports whether body is a Wallet "name_conflict" error and
+// returns the existing entity's id when the message discloses it, e.g.
+// `a category with name 'X' already exists (id: <uuid>, custom category)`.
+func nameConflict(body []byte) (string, bool) {
+	var e struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(body, &e) != nil || e.Error != "name_conflict" {
+		return "", false
+	}
+	if m := conflictIDRe.FindSubmatch(body); m != nil {
+		return string(m[1]), true
+	}
+	return "", true
 }
 
 func is429(status int) bool { return status == http.StatusTooManyRequests }

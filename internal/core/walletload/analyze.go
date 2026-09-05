@@ -378,6 +378,13 @@ func resolveAlias(
 ) (categoryResolution, error) {
 	target = strings.TrimSpace(target)
 	if parent, ok := strings.CutPrefix(target, CreateCategoryPrefix); ok {
+		// A prior (possibly interrupted) run may already have created this
+		// custom category, and Wallet keeps custom categories across a data
+		// reset. Resolve to the existing one so a re-run is idempotent instead
+		// of 400-ing on a name conflict.
+		if c, ok := idx.byName[strings.ToLower(name)]; ok {
+			return categoryResolution{id: c.ID, action: CategoryResolved}, nil
+		}
 		p, has := idx.systemByName[strings.ToLower(strings.TrimSpace(parent))]
 		if !has {
 			return categoryResolution{action: CategoryNone},

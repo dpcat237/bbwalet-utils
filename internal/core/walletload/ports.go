@@ -55,6 +55,22 @@ func (e *ErrRateLimited) Error() string {
 	return fmt.Sprintf("wallet api rate limited, retry after %s", e.RetryAfter)
 }
 
+// ErrAlreadyExists is the core translation of a create call that hit an entity
+// which already exists (Wallet keeps accounts/custom categories across a data
+// reset, and GET can lag a prior run's POST). ID is the existing entity's id
+// when the API disclosed it in the error body — it usually does — else "".
+type ErrAlreadyExists struct {
+	ID string
+}
+
+// Error implements error.
+func (e *ErrAlreadyExists) Error() string {
+	if e.ID != "" {
+		return "wallet api: entity already exists (id " + e.ID + ")"
+	}
+	return "wallet api: entity already exists"
+}
+
 // ExportReader reads and parses a Wallet CSV export.
 type ExportReader interface {
 	Read(ctx context.Context) ([]ExportRow, error)

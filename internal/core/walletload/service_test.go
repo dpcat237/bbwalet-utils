@@ -498,11 +498,60 @@ func TestService_Load_Progress_ReportsStartPhasesAndBatches(t *testing.T) {
 		wl.PhaseLoadingCatalogue, wl.PhaseCreatingCategories, wl.PhaseCreatingRecords,
 	}, phases)
 
-	batches := p.byKind(wl.ProgressBatch)
-	require.NotEmpty(t, batches)
-	require.NotEmpty(t, batches[0].Account)
-	require.Equal(t, 3, batches[len(batches)-1].Created)
-	require.Equal(t, 3, batches[len(batches)-1].Total)
+	var catBatches, recBatches []wl.ProgressEvent
+	for _, b := range p.byKind(wl.ProgressBatch) {
+		if b.Phase == wl.PhaseCreatingCategories {
+			catBatches = append(catBatches, b)
+		} else {
+			recBatches = append(recBatches, b)
+		}
+	}
+
+	require.NotEmpty(t, catBatches, "category creation reports progress")
+	require.Equal(t, 1, catBatches[len(catBatches)-1].Created) // Pharmacy
+	require.Equal(t, 1, catBatches[len(catBatches)-1].Total)
+
+	require.NotEmpty(t, recBatches)
+	require.NotEmpty(t, recBatches[0].Account)
+	require.Equal(t, 3, recBatches[len(recBatches)-1].Created)
+	require.Equal(t, 3, recBatches[len(recBatches)-1].Total)
+}
+
+func TestService_Load_Progress_ReportsAccountAndCategoryCreation(t *testing.T) {
+	t.Parallel()
+
+	rows := []wl.ExportRow{
+		{RowKey: "k1", Account: "New USD", Category: "Coffee", Currency: "USD", Amount: "-3.00", Date: at("2024-01-01 10:00:00"), CustomCategory: true},
+		{RowKey: "k2", Account: "New USD", Category: "Snacks", Currency: "USD", Amount: "-2.00", Date: at("2024-01-02 10:00:00"), CustomCategory: true},
+	}
+	cat := &fakeCatalog{accounts: nil, categories: sampleCategories()} // account + both categories are new
+	p := &fakeProgress{}
+	svc := wl.New(wl.Deps{
+		Reader: fakeReader{rows: rows}, Catalog: cat, CatalogWriter: cat,
+		Records: &fakeRecords{}, State: newFakeState(), Journal: &fakeJournal{},
+		Waiter: &fakeWaiter{}, Progress: p,
+	})
+
+	_, err := svc.Load(context.Background(), createOpts())
+	require.NoError(t, err)
+
+	var phases []wl.LoadPhase
+	for _, e := range p.byKind(wl.ProgressPhase) {
+		phases = append(phases, e.Phase)
+	}
+	require.Equal(t, []wl.LoadPhase{
+		wl.PhaseLoadingCatalogue, wl.PhaseCreatingAccounts,
+		wl.PhaseCreatingCategories, wl.PhaseCreatingRecords,
+	}, phases)
+
+	last := map[wl.LoadPhase]wl.ProgressEvent{}
+	for _, b := range p.byKind(wl.ProgressBatch) {
+		last[b.Phase] = b
+	}
+	require.Equal(t, 1, last[wl.PhaseCreatingAccounts].Created)
+	require.Equal(t, 1, last[wl.PhaseCreatingAccounts].Total)
+	require.Equal(t, 2, last[wl.PhaseCreatingCategories].Created)
+	require.Equal(t, 2, last[wl.PhaseCreatingCategories].Total)
 }
 
 func TestService_Load_Progress_WaitEnterExitAroundRateLimit(t *testing.T) {

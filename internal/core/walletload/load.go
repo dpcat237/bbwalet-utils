@@ -18,15 +18,59 @@ func (s *Service) createAccounts(
 	ctx context.Context, toCreate []PlannedAccount, sum *Summary,
 ) (map[string]string, error) {
 	made := make(map[string]string, len(toCreate))
-	for _, a := range toCreate {
+	for i, a := range toCreate {
 		sum.Requests++
 		acc, err := s.deps.CatalogWriter.CreateAccount(ctx, CreateAccountInput(a))
 		if err != nil {
-			return nil, fmt.Errorf("creating account %q: %w", a.Name, err)
+			id, ok := s.adoptExistingAccount(ctx, err, a.Name)
+			if !ok {
+				return nil, fmt.Errorf("creating account %q: %w", a.Name, err)
+			}
+			acc.ID = id
 		}
 		made[strings.ToLower(a.Name)] = acc.ID
+		s.report(ProgressEvent{
+			Kind: ProgressBatch, Phase: PhaseCreatingAccounts,
+			Created: i + 1, Total: len(toCreate), Requests: sum.Requests,
+		})
 	}
 	return made, nil
+}
+
+func (s *Service) adoptExistingAccount(ctx context.Context, err error, name string) (string, bool) {
+	return adoptExisting(ctx, err, name, s.deps.Catalog.Accounts,
+		func(a Account) (string, string) { return a.Name, a.ID })
+}
+
+func (s *Service) adoptExistingCategory(ctx context.Context, err error, name string) (string, bool) {
+	return adoptExisting(ctx, err, name, s.deps.Catalog.Categories,
+		func(c Category) (string, string) { return c.Name, c.ID })
+}
+
+// adoptExisting turns an ErrAlreadyExists from a create call into the existing
+// entity's id: the id the API disclosed, else a catalogue re-read matched by
+// name. It returns ok=false for any other error (so the caller surfaces it).
+func adoptExisting[T any](
+	ctx context.Context, err error, want string,
+	list func(context.Context) ([]T, error), nameID func(T) (string, string),
+) (string, bool) {
+	var exists *ErrAlreadyExists
+	if !errors.As(err, &exists) {
+		return "", false
+	}
+	if exists.ID != "" {
+		return exists.ID, true
+	}
+	all, lerr := list(ctx)
+	if lerr != nil {
+		return "", false
+	}
+	for _, e := range all {
+		if name, id := nameID(e); strings.EqualFold(name, want) {
+			return id, true
+		}
+	}
+	return "", false
 }
 
 func backfillAccounts(an *analysis, made map[string]string) {
@@ -49,13 +93,21 @@ func (s *Service) createCategories(
 	ctx context.Context, toCreate []PlannedCategory, sum *Summary,
 ) (map[string]string, error) {
 	made := make(map[string]string, len(toCreate))
-	for _, c := range toCreate {
+	for i, c := range toCreate {
 		sum.Requests++
 		cat, err := s.deps.CatalogWriter.CreateCustomCategory(ctx, c.Name, c.ParentID)
 		if err != nil {
-			return nil, fmt.Errorf("creating custom category %q: %w", c.Name, err)
+			id, ok := s.adoptExistingCategory(ctx, err, c.Name)
+			if !ok {
+				return nil, fmt.Errorf("creating custom category %q: %w", c.Name, err)
+			}
+			cat.ID = id
 		}
 		made[strings.ToLower(c.Name)] = cat.ID
+		s.report(ProgressEvent{
+			Kind: ProgressBatch, Phase: PhaseCreatingCategories,
+			Created: i + 1, Total: len(toCreate), Requests: sum.Requests,
+		})
 	}
 	return made, nil
 }

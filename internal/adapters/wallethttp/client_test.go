@@ -332,6 +332,54 @@ func TestClient_CreateCustomCategory_RetriesSustained429(t *testing.T) {
 	require.Equal(t, "new-cat-1", got.ID)
 }
 
+// A 400 name_conflict (the category exists but GET lagged, or it survived a
+// Wallet data reset) surfaces as core.ErrAlreadyExists carrying the existing id
+// so the loader can adopt it instead of aborting.
+func TestClient_CreateCustomCategory_NameConflict(t *testing.T) {
+	t.Parallel()
+
+	c := newClient(t, map[string]route{
+		"POST /v1/api/categories/custom": {status: 400, fixture: "error_name_conflict.json"},
+	})
+
+	_, err := c.CreateCustomCategory(context.Background(), "Advertisement", "cat-others")
+	var ex *core.ErrAlreadyExists
+	require.ErrorAs(t, err, &ex)
+	require.Equal(t, "53cbff21-5039-4287-94b6-7ce71986f06a", ex.ID)
+}
+
+// A transient connection drop (EOF) on a create must be retried, not fatal —
+// the round trip never reached the server.
+func TestClient_CreateCustomCategory_RetriesTransientEOF(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		call := calls
+		mu.Unlock()
+		if call == 1 {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			require.NoError(t, err)
+			_ = conn.Close() // client sees EOF
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		b, err := os.ReadFile(filepath.Join("testdata", "category_created.json"))
+		require.NoError(t, err)
+		_, _ = w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+	c := wallethttp.New(&http.Client{Timeout: 5 * time.Second}, srv.URL, testToken)
+
+	got, err := c.CreateCustomCategory(context.Background(), "Buy house", "cat-housing")
+	require.NoError(t, err)
+	require.Equal(t, "new-cat-1", got.ID)
+	require.Equal(t, 2, calls, "first attempt dropped, second succeeded")
+}
+
 func TestClient_NoTokenInErrorOutput(t *testing.T) {
 	t.Parallel()
 
